@@ -1,0 +1,19 @@
+channels:
+  - conda-forge
+  - pytorch
+
+dependencies:
+  - python=3.7.3
+  - pytorch=1.7.0 
+  - torchvision=0.8.1
+  - cudatoolkit=10.2.89 
+  - pip
+  - pip:
+    - gym==0.17.3
+    - procgen==0.9.2
+    - atari-py==0.2.6
+    - stable-baselines3==0.10.0
+    - matplotlib
+    - pandas
+    - opencv-python==4.4.0.46
+    - pyyaml
