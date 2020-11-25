@@ -16,7 +16,7 @@ def make_atari_default(
     monitor_dir: Optional[str] = None,
     wrapper_kwargs: Optional[Dict[str, Any]] = None,
     env_kwargs: Optional[Dict[str, Any]] = None,
-    vec_env_cls: Optional[Union[DummyVecEnv, SubprocVecEnv]] = SubprocVecEnv,
+    vec_env_cls: Optional[Union[DummyVecEnv, SubprocVecEnv]] = DummyVecEnv,
     vec_env_kwargs: Optional[Dict[str, Any]] = None,
 ) -> VecEnv:
     """
@@ -206,7 +206,7 @@ class ContWrapper(AtariWrapper):
         
         # Replace done with negative reward and keep the episode going
         if done:
-            reward = -10
+            reward = -2
             done = False
             self.env.reset()
         # Overwrite the done signal when 
@@ -295,4 +295,7 @@ class HideScore(gym.ObservationWrapper):
             frame[183:190, 32:46] = [0,0,0]
             frame[10:18, 61:107] = [0,0,0]
             frame[32:40, 20:31] = [0,0,0]
+        elif self.spec.id == 'PongNoFrameskip-v4':
+            frame[:24,:] = [236,236,236]
+            
         return frame

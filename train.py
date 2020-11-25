@@ -70,12 +70,16 @@ class AnnotationBuffer(object):
     @property
     def loss_lb(self):
         '''Train set loss lower bound'''
-        return - np.mean([label == 0.5 for (c1, c2, label) in self.train_data]) * np.log(0.5)
+        even_pref_freq = np.mean([label == 0.5 for (c1, c2, label) in self.train_data])
+
+        return -((1 - even_pref_freq) * np.log(0.95) + even_pref_freq * np.log(0.5))
 
     @property
     def val_loss_lb(self):
         '''Validation set loss lower bound'''
-        return - np.mean([label == 0.5 for (c1,c2,label) in self.val_data]) * np.log(0.5)
+        even_pref_freq = np.mean([label == 0.5 for (c1, c2, label) in self.val_data])
+
+        return -((1 - even_pref_freq) * np.log(0.95) + even_pref_freq * np.log(0.5))
 
 
     def get_all_pairs(self):
@@ -282,7 +286,7 @@ def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'c
     
 
 @timeitt
-def train_policy(venv_fn, reward_model, policy, num_steps, device, i):
+def train_policy(venv_fn, reward_model, policy, num_steps, device, i, log_name):
     '''
     Creates new environment by wrapping the env, with Vec_reward_wrapper given the reward_model.
     Traines policy in the new envirionment for num_steps
@@ -294,16 +298,17 @@ def train_policy(venv_fn, reward_model, policy, num_steps, device, i):
     proxy_reward_function = lambda x: reward_model.rew_fn(torch.from_numpy(x).float().to(device))
     proxy_reward_venv = Vec_reward_wrapper(venv_fn(), proxy_reward_function)
 
+    # resetting the environment to avoid rasing mistakes from reset_num_timesteps
+    proxy_reward_venv.reset()
     policy.set_env(proxy_reward_venv)
+
     
     # manual hacky implementation of the learning rate
     policy.learning_rate = 0.0007*(1 - 0.0025 * i)
     policy._setup_lr_schedule()
 
-    # resetting the environment to avoid rasing mistakes from reset_num_timesteps
     # reset_num timesteps allows having single TB_log when calling .learn() multiple times
-    policy.env.reset()
-    policy.learn(num_steps, reset_num_timesteps = False)
+    policy.learn(num_steps, reset_num_timesteps = False, tb_log_name=log_name)
 
     return policy
    
@@ -314,18 +319,14 @@ def collect_annotations(venv, policy, num_pairs, clip_size):
     selects pairs randomly and annotates 
     Returns a list of named tuples (clip0, clip1, label), where label is float in [0,1]
 
-    # '''
-    # #This is probably optimal for speed on Atari and doesn't make a difference on Procgen
-    n_envs = multiprocessing.cpu_count()
+    '''
 
-    # # venv = make_vec_env_fix(env_fn, n_envs = n_envs, vec_env_cls = SubprocVecEnv) 
-    # venv = env_fn()
+    n_envs = venv.num_envs
 
-
-    # venv.set_attr('max_steps', int(clip_size * 2 * num_pairs / n_envs) + 10)
     clip_pool = []
     obs_stack = []
     obs_b = venv.reset()
+    #collecting at least 
     while len(clip_pool) < num_pairs * 2:
         clip_returns = n_envs * [0]
         for _ in range(clip_size):
@@ -377,7 +378,7 @@ def main():
     parser.add_argument('--clip_size', type=int, default=25)
     parser.add_argument('--num_iters', type=int, default=250)
     parser.add_argument('--steps_per_iter', type=int, default=2 * 10**5)
-    parser.add_argument('--pairs_per_iter', type=int, default=4 * 10**4)
+    parser.add_argument('--pairs_per_iter', type=int, default=2 * 10**4)
     parser.add_argument('--pairs_in_batch', type=int, default=16)
     parser.add_argument('--l2', type=float, default=0.0001)
 
@@ -414,12 +415,12 @@ def main():
 
     eval_env_fn = lambda: make_atari_default('BeamRiderNoFrameskip-v4', n_envs=16, seed = 0)
 
-    video_env= make_atari_default('BeamRiderNoFrameskip-v4', vec_env_cls = DummyVecEnv)
+    video_env_fn= lambda: make_atari_default('BeamRiderNoFrameskip-v4', vec_env_cls = DummyVecEnv)
 
     #in case this is a fresh run 
     if not args.resume_training:
         i_num = 1
-        policy = A2C('CnnPolicy', venv_fn(), verbose=1, tensorboard_log=run_dir+"/TensorBoard", ent_coef=0.01, learning_rate = 0.0007)
+        policy = A2C('CnnPolicy', venv_fn(), verbose=1, tensorboard_log="TB_LOGS", ent_coef=0.01, learning_rate = 0.0007)
         reward_model = RewardNet(l2= args.l2, env_type = args.env_type)
         data_buffer = AnnotationBuffer()
         store_args(args, run_dir)   
@@ -428,18 +429,18 @@ def main():
         print(f'================== Initial iter ====================')
 
         prev_size = data_buffer.size     
-        while data_buffer.size - prev_size < args.init_buffer_size:
-            annotations = collect_annotations(annotation_env, policy, args.init_buffer_size, args.clip_size)
-            data_buffer.add(annotations)   
+        
+        annotations = collect_annotations(annotation_env, policy, args.init_buffer_size, args.clip_size)
+        data_buffer.add(annotations)   
 
         print(f'Buffer size = {data_buffer.size}')
         
         reward_model, rm_train_stats = train_reward(reward_model, data_buffer, args.init_train_size, args.pairs_in_batch) 
-        policy = train_policy(venv_fn, reward_model, policy, args.steps_per_iter, device, 0)
+        policy = train_policy(venv_fn, reward_model, policy, args.steps_per_iter, device, 0,  args.log_name)
 
         save_state(run_dir, 0, reward_model, policy, data_buffer)
 
-        record_video(policy, video_env, video_dir, 4000, f"0_ITER_{args.env_name}")
+        record_video(policy, video_env_fn(), video_dir, 4000, f"0_ITER_{args.env_name}")
         # true_performance = eval_policy(venv_fn(), policy, n_eval_episodes=50)
         # proxy_performance = eval_policy(test_env, policy, n_eval_episodes=50)
 
@@ -463,21 +464,24 @@ def main():
         t_start = time.time()
         print(f'================== iter : {i} ====================')
 
+        # adjusting the number of pairs to collect every 5M agent timesteps
         if i % 25 == 0:
             num_pairs = int(init_num_pairs / (i/25 + 1))
 
-        prev_size = data_buffer.size     
-        while data_buffer.size - prev_size < num_pairs:
-            annotations = collect_annotations(annotation_env, policy, num_pairs, args.clip_size)
-            data_buffer.add(annotations)   
+        # periodically reinitializing the environment to avoid "env needs reset" error
+        if max(annotation_env.env_method('get_total_steps')) > 2e4:
+            annotation_env = venv_fn()
+
+        annotations = collect_annotations(annotation_env, policy, num_pairs, args.clip_size)
+        data_buffer.add(annotations)   
 
         print(f'Buffer size = {data_buffer.size}')
         
         reward_model, rm_train_stats = train_reward(reward_model, data_buffer, args.pairs_per_iter, args.pairs_in_batch) 
-        policy = train_policy(venv_fn, reward_model, policy, args.steps_per_iter, device, i)
+        policy = train_policy(venv_fn, reward_model, policy, args.steps_per_iter, device, i, args.log_name)
         save_state(run_dir, i, reward_model, policy, data_buffer)
 
-        record_video(policy, video_env, video_dir, 2000, f"{i}_ITER00_{args.env_name}")
+        record_video(policy, video_env_fn(), video_dir, 4000, f"{i}_ITER00_{args.env_name}")
         # true_performance = eval_policy(venv_fn(), policy, n_eval_episodes=50)
         # proxy_performance = eval_policy(test_env, policy, n_eval_episodes=50)
 

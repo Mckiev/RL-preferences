@@ -113,14 +113,18 @@ def log_iter(run_dir, i, data_buffer, true_return, proxy_return, rm_train_stats)
 
 
 @timeitt
-def eval_policy(venv, policy, n_eval_episodes):
+def eval_policy(venv, policy, n_eval_episodes, rand = False):
 
     finished_eps = 0
     ep_returns = []
     obs_b = venv.reset()
     returns_b = np.zeros(len(obs_b))
     while finished_eps < n_eval_episodes:
-        action_b , _states = policy.predict(obs_b)
+        if rand:
+            action_b = 16*[venv.action_space.sample()]
+        else:
+            action_b , _states = policy.predict(obs_b)
+
         obs_b, r_b, dones, infos = venv.step(action_b)
 
         returns_b += r_b
