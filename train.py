@@ -406,16 +406,18 @@ def main():
     #         start_level = args.start_level
     #         )
     # elif args.env_type == 'atari':
-    #     env_fn = lambda: VecFrameStack(ContWrapper(gym.make("BeamRiderNoFrameskip-v4")), n_stack=4)
+    #     env_fn = lambda: VecFrameStack(ContWrapper(gym.make(atari_name)), n_stack=4)
 
-    venv_fn  =  lambda: make_atari_continuous("BeamRiderNoFrameskip-v4",
+    atari_name = args.env_name + "NoFrameskip-v4"
+
+    venv_fn  =  lambda: make_atari_continuous(atari_name,
                                                         n_envs=16,
                                                         monitor_dir = monitor_dir)
     annotation_env = venv_fn()
 
-    eval_env_fn = lambda: make_atari_default('BeamRiderNoFrameskip-v4', n_envs=16, seed = 0)
+    eval_env_fn = lambda: make_atari_default(atari_name, n_envs=16, seed = 0)
 
-    video_env_fn= lambda: make_atari_default('BeamRiderNoFrameskip-v4', vec_env_cls = DummyVecEnv)
+    video_env_fn= lambda: make_atari_default(atari_name, vec_env_cls = DummyVecEnv)
 
     #in case this is a fresh run 
     if not args.resume_training:
