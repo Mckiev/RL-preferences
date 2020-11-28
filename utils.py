@@ -96,20 +96,20 @@ def load_args(args):
     return args
 
 
-def log_iter(run_dir, rl_steps, data_buffer, true_return, proxy_return, rm_train_stats):
+def log_iter(run_dir, rl_steps, data_buffer, true_return, proxy_return, rm_train_stats, iter_time):
 
     info_path = os.path.join(run_dir, 'LOG.csv')
 
     if not os.path.exists(info_path):
         with open(info_path, 'w') as f: 
             rew_writer = csv.writer(f, delimiter = ',', quotechar='|', quoting=csv.QUOTE_MINIMAL)
-            rew_writer.writerow(['RL_steps', 'buffer_size', 'true_return', 'proxy_return', 'train_loss', 'val_loss', 'min_val_loss', 'l2'])
+            rew_writer.writerow(['RL_steps', 'iter_time', 'buffer_size', 'true_return', 'proxy_return', 'train_loss', 'val_loss', 'min_val_loss', 'l2'])
 
 
     train_loss, val_loss, l2 = rm_train_stats
     with open(info_path, 'a') as f: 
         rew_writer = csv.writer(f, delimiter = ',', quotechar='|', quoting=csv.QUOTE_MINIMAL)
-        rew_writer.writerow([rl_steps, data_buffer.size, true_return, proxy_return, train_loss, val_loss, data_buffer.val_loss_lb, l2])
+        rew_writer.writerow([rl_steps, int(iter_time), data_buffer.size, true_return, proxy_return, train_loss, val_loss, data_buffer.val_loss_lb, l2])
 
 
 @timeitt

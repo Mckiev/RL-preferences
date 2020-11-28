@@ -379,9 +379,10 @@ def main():
     parser.add_argument('--init_buffer_size', type=int, default=500)
     parser.add_argument('--init_train_size', type=int, default=10**5)
     parser.add_argument('--clip_size', type=int, default=25)
-    parser.add_argument('--num_iters', type=int, default=250)
-    parser.add_argument('--steps_per_iter', type=int, default=2 * 10**5)
-    parser.add_argument('--pairs_per_iter', type=int, default=2 * 10**4)
+    parser.add_argument('--total_timesteps', type=int, default=5*10**7)
+    parser.add_argument('--n_labels', type=int, default=6800)
+    parser.add_argument('--steps_per_iter', type=int, default=10**5)
+    parser.add_argument('--pairs_per_iter', type=int, default=10**4)
     parser.add_argument('--pairs_in_batch', type=int, default=16)
     parser.add_argument('--l2', type=float, default=0.0001)
 
@@ -451,31 +452,35 @@ def main():
         # true_performance = eval_policy(venv_fn(), policy, n_eval_episodes=50)
         # proxy_performance = eval_policy(test_env, policy, n_eval_episodes=50)
 
-        true_performance = eval_policy(eval_env_fn(), policy, n_eval_episodes=100)
+        true_performance = 0 #eval_policy(eval_env_fn(), policy, n_eval_episodes=100)
         proxy_performance = 0
 
         print(f'True policy preformance = {true_performance}') 
         print(f'Proxy policy preformance = {proxy_performance}') 
 
 
-        
-        log_iter(run_dir, args.steps_per_iter, data_buffer, true_performance, proxy_performance, rm_train_stats)
         t_finish = time.time()
+        iter_time = t_finish - t_start
+        log_iter(run_dir, args.steps_per_iter, data_buffer, true_performance, proxy_performance, rm_train_stats, iter_time)
+        
         print(f'Iteration took {time.gmtime(t_finish - t_start).tm_min} min {time.gmtime(t_finish - t_start).tm_sec} sec')
         os.rename(monitor_dir, monitor_dir + '_' + str(0))        
         i_num = 1 
 
 
-    num_pairs = init_num_pairs = round(args.steps_per_iter / 1e5 * 40)
+    num_iters = int(args.total_timesteps / args.steps_per_iter)
+    # initial number of pairs to label 
+    num_pairs = init_num_pairs = round((args.n_labels - args.init_buffer_size) / 0.292 / num_iters) 
+
     print('init_num_pairs = {}'.format(init_num_pairs))
-    for i in range(i_num, args.num_iters):
+    for i in range(i_num, num_iters):
         t_start = time.time()
         print(f'================== iter : {i} ====================')
 
         rl_steps = (i + 1) * args.steps_per_iter
-        # adjusting the number of pairs to collect every 5M agent timesteps
+        # decaying the number of pairs to collect each 10% of the total agent timesteps
         if rl_steps % (5*10**6) == 0:
-            num_pairs = round(init_num_pairs / (rl_steps/5e6 + 1))
+            num_pairs = round(init_num_pairs / (rl_steps/(args.total_timesteps/10) + 1))
 
         # # periodically reinitializing the environment to avoid "env needs reset" error
         # if max(annotation_env.env_method('get_total_steps')) > 2e4:
@@ -501,14 +506,13 @@ def main():
         print(f'Proxy policy preformance = {proxy_performance}') 
 
 
-        
-        log_iter(run_dir, rl_steps, data_buffer, true_performance, proxy_performance, rm_train_stats)
         t_finish = time.time()
-        print(f'Iteration took {time.gmtime(t_finish - t_start).tm_min} min {time.gmtime(t_finish - t_start).tm_sec} sec')
+        iter_time = t_finish - t_start
+        log_iter(run_dir, rl_steps, data_buffer, true_performance, proxy_performance, rm_train_stats, iter_time)
+
+        print(f'Iteration took {time.gmtime(iter_time).tm_min} min {time.gmtime(iter_time).tm_sec} sec')
         os.rename(monitor_dir, monitor_dir + '_' + str(i))        
 
 if __name__ == '__main__':
     main()
-
-
 
