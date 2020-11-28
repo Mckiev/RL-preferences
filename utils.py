@@ -109,7 +109,7 @@ def log_iter(run_dir, rl_steps, data_buffer, true_return, proxy_return, rm_train
     train_loss, val_loss, l2 = rm_train_stats
     with open(info_path, 'a') as f: 
         rew_writer = csv.writer(f, delimiter = ',', quotechar='|', quoting=csv.QUOTE_MINIMAL)
-        rew_writer.writerow([rl_steps, int(iter_time), data_buffer.size, true_return, proxy_return, train_loss, val_loss, data_buffer.val_loss_lb, l2])
+        rew_writer.writerow([rl_steps, int(iter_time), data_buffer.current_size, true_return, proxy_return, train_loss, val_loss, data_buffer.val_loss_lb, l2])
 
 
 @timeitt

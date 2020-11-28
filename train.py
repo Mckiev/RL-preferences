@@ -33,25 +33,44 @@ class AnnotationBuffer(object):
     to noize in labeling
     """
 
-    def __init__(self, max_size=1000):
+    def __init__(self, max_size=3000):
+        self.max_size = max_size
         self.current_size = 0
-        self.train_data = []
-        self.val_data = []
+
+        #calculate max
+        self.train_max_size = int(self.max_size * (1 - 1/np.exp(1)))
+        self.val_max_size = self.max_size - self.train_max_size
+
+        self.train_data_all = []
+        self.val_data_all = []
+
 
     def add(self, data):
         '''
         1/e of data goes to the validatation set
         the rest goes to the training set
         '''
-        # new_val_data, new_train_data = np.split(data, [int(len(data) / np.exp(1))])
-        new_val_data = data[:int(len(data) / np.exp(1))]
-        new_train_data = data[int(len(data) / np.exp(1)):]
-        self.val_data.extend(new_val_data)
-        self.train_data.extend(new_train_data)
+        # determine how much goes to train vs val set, such that
+        # the total split is proportional to (e-1)/e
+        new_train_size = int((self.current_size + len(data)) * (1 - 1/np.exp(1)))
+        num_new_train_pairs = new_train_size - len(self.train_data_all)
 
+
+        new_train_data = data[:num_new_train_pairs]
+        new_val_data = data[num_new_train_pairs:]
+        
+        # Keeping all the samples
+        self.val_data_all.extend(new_val_data)
+        self.train_data_all.extend(new_train_data)
         self.current_size += len(data)
 
+        # Only recent samples are available for training
+        # such that total training data size < max_size   
+        self.train_data = self.train_data_all[-self.train_max_size:]
+        self.val_data = self.val_data_all[-self.val_max_size:]
 
+
+       
     def sample_batch(self, n):
         return random.sample(self.train_data, n)
 
@@ -62,10 +81,6 @@ class AnnotationBuffer(object):
         'iterator over validation set'
         return iter(self.val_data)
 
-    @property
-    def size(self):
-        '''returns buffer size'''
-        return self.current_size
 
     @property
     def loss_lb(self):
@@ -81,9 +96,11 @@ class AnnotationBuffer(object):
 
         return -((1 - even_pref_freq) * np.log(0.95) + even_pref_freq * np.log(0.5))
 
-
     def get_all_pairs(self):
-        return self.train_data + self.val_data
+        '''
+        Used to normalize the reward model
+        '''
+        return self.train_data_all + self.val_data_all
 
 class RewardNet(nn.Module):
     """Here we set up a callable reward model
@@ -96,22 +113,22 @@ class RewardNet(nn.Module):
         if env_type == 'procgen':
             self.model = nn.Sequential(
                 #conv1
-                nn.Dropout2d(p=0.2),
+                nn.Dropout2d(p=0.5),
                 nn.Conv2d(3, 16, 3, stride=1),
                 nn.MaxPool2d(4, stride=2),
                 nn.LeakyReLU(),
-                nn.BatchNorm2d(16),
+                nn.BatchNorm2d(16, momentum = 0.01),
                 #conv2
-                nn.Dropout2d(p=0.2),
+                nn.Dropout2d(p=0.5),
                 nn.Conv2d(16, 16, 3, stride=1),
                 nn.MaxPool2d(4, stride=2),
                 nn.LeakyReLU(),
-                nn.BatchNorm2d(16),
+                nn.BatchNorm2d(16, momentum = 0.01),
                 #conv3
-                nn.Dropout2d(p=0.2),
+                nn.Dropout2d(p=0.5),
                 nn.Conv2d(16, 16, 3, stride=1),
                 nn.LeakyReLU(),
-                nn.BatchNorm2d(16),
+                nn.BatchNorm2d(16, momentum = 0.01),
                 # 2 layer mlp
                 nn.Flatten(),
                 nn.Linear(11*11*16, 64),
@@ -121,25 +138,25 @@ class RewardNet(nn.Module):
         elif env_type == 'atari':
             self.model = nn.Sequential(
                 #conv1
-                nn.Dropout2d(p=0.2),
+                nn.Dropout2d(p=0.5),
                 nn.Conv2d(4, 16, 7, stride=3),
                 nn.LeakyReLU(),
-                nn.BatchNorm2d(16),
+                nn.BatchNorm2d(16, momentum = 0.01),
                 #conv2
-                nn.Dropout2d(p=0.2),
+                nn.Dropout2d(p=0.5),
                 nn.Conv2d(16, 16, 5, stride=2),
                 nn.LeakyReLU(),
-                nn.BatchNorm2d(16),
+                nn.BatchNorm2d(16, momentum = 0.01),
                 #conv3
-                nn.Dropout2d(p=0.2),
+                nn.Dropout2d(p=0.5),
                 nn.Conv2d(16, 16, 3, stride=1),
                 nn.LeakyReLU(),
-                nn.BatchNorm2d(16),
+                nn.BatchNorm2d(16, momentum = 0.01),
                 #conv4
-                nn.Dropout2d(p=0.2),
+                nn.Dropout2d(p=0.5),
                 nn.Conv2d(16, 16, 3, stride=1),
                 nn.LeakyReLU(),
-                nn.BatchNorm2d(16),
+                nn.BatchNorm2d(16, momentum = 0.01),
                 # 2 layer mlp
                 nn.Flatten(),
                 nn.Linear(7*7*16, 64),
@@ -436,12 +453,12 @@ def main():
         t_start = time.time()
         print(f'================== Initial iter ====================')
 
-        prev_size = data_buffer.size     
+        prev_size = data_buffer.current_size     
         
         annotations = collect_annotations(annotation_env, policy, args.init_buffer_size, args.clip_size)
         data_buffer.add(annotations)   
 
-        print(f'Buffer size = {data_buffer.size}')
+        print(f'Buffer size = {data_buffer.current_size}')
         
         reward_model, rm_train_stats = train_reward(reward_model, data_buffer, args.init_train_size, args.pairs_in_batch) 
         policy = train_policy(venv_fn, reward_model, policy, args.steps_per_iter, device, 0,  args.log_name)
@@ -489,7 +506,7 @@ def main():
         annotations = collect_annotations(annotation_env, policy, num_pairs, args.clip_size)
         data_buffer.add(annotations)   
 
-        print(f'Buffer size = {data_buffer.size}')
+        print(f'Buffer size = {data_buffer.current_size}')
         
         reward_model, rm_train_stats = train_reward(reward_model, data_buffer, args.pairs_per_iter, args.pairs_in_batch) 
         policy = train_policy(venv_fn, reward_model, policy, args.steps_per_iter, device, rl_steps, args.log_name)
