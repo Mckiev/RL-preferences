@@ -9,18 +9,28 @@ from stable_baselines3.common.vec_env import VecVideoRecorder, VecFrameStack
 
 def timeitt(method):
     def timed(*args, **kw):
+        g = method.__globals__  
+        LOG_TIME = g.get('LOG_TIME', None)
+        if LOG_TIME:
+            if os.path.exists(LOG_TIME):
+                f = open(LOG_TIME, 'a')
+            else:
+                f = open(LOG_TIME, 'w')
+
         ts = time.time()
         result = method(*args, **kw)
         te = time.time()
-        if 'log_time' in kw:
-            name = kw.get('log_name', method.__name__.upper())
-            kw['log_time'][name] = int((te - ts) * 1000)
+        
+        if LOG_TIME:
+            f.write(f"{method.__name__} : {(te - ts) * 1000:2.2f}ms \n")
+            f.close()
         else:
             print ('time spent by %r  %2.2f ms' % \
                   (method.__name__, (te - ts) * 1000))
         return result
     return timed 
 
+@timeitt
 def save_state(run_dir, i, reward_model, policy, data_buffer):
 
     save_dir =os.path.join(run_dir, "saved_states", str(i))
@@ -35,9 +45,11 @@ def save_state(run_dir, i, reward_model, policy, data_buffer):
 
     with open(data_buff_save_path, 'wb') as f:
         pickle.dump(data_buffer, f)  
+        
 
     policy.save(policy_save_path)
 
+@timeitt
 def load_state(run_dir):
 
     state_dir = os.path.join(run_dir, "saved_states")
@@ -136,7 +148,8 @@ def eval_policy(venv, policy, n_eval_episodes, rand = False):
                     returns_b[n] = 0
     venv.close()
     return np.sum(ep_returns) / finished_eps
-
+    
+@timeitt
 def record_video(trained_model, env, video_folder, video_length, name):
 
     obs = env.reset()
@@ -153,3 +166,23 @@ def record_video(trained_model, env, video_folder, video_length, name):
         obs, _, _, _ = env.step(action[0])
     # Save the video
     env.close()
+
+
+from stable_baselines3.common.callbacks import BaseCallback
+class TensorboardCallback(BaseCallback):
+    """
+    Custom callback for plotting additional values in tensorboard.
+    """
+
+    def __init__(self, log_data, verbose=0):
+        super(TensorboardCallback, self).__init__(verbose)
+        self.buffer_size,  self.loss_lb, self.iter_time, (self.train_loss, self.val_loss, self.l2) = log_data
+
+    def _on_step(self) -> bool:
+        self.logger.record('RM/buffer_size', self.buffer_size)
+        self.logger.record('RM/iter_time', self.iter_time)
+        self.logger.record('RM/loss_lb', self.loss_lb)
+        self.logger.record('RM/train_loss', self.train_loss)
+        self.logger.record('RM/val_loss', self.val_loss)
+        self.logger.record('RM/l2', self.l2)
+        return True

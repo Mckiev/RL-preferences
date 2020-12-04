@@ -297,5 +297,7 @@ class HideScore(gym.ObservationWrapper):
             frame[32:40, 20:31] = [0,0,0]
         elif self.spec.id == 'PongNoFrameskip-v4':
             frame[:24,:] = [236,236,236]
+        elif self.spec.id == 'SeaquestNoFrameskip-v4':
+            frame[:20,:] = [0,0,0]
             
         return frame

@@ -8,6 +8,7 @@ from stable_baselines3 import A2C
 from stable_baselines3.common.utils import get_linear_fn
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.vec_env import VecVideoRecorder, DummyVecEnv, SubprocVecEnv
+from stable_baselines3.common.utils import safe_mean
 
 #from register_policies import ImpalaPolicy
 from utils import *
@@ -22,7 +23,6 @@ import multiprocessing
 import os, time, datetime, sys
 # tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 # os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-
 class AnnotationBuffer(object):
     """Buffer of annotated pairs of clips
 
@@ -74,9 +74,6 @@ class AnnotationBuffer(object):
     def sample_batch(self, n):
         return random.sample(self.train_data, n)
 
-    def sample_val_batch(self, n):
-        return random.sample(self.val_data, n)
-
     def val_iter(self):
         'iterator over validation set'
         return iter(self.val_data)
@@ -107,25 +104,25 @@ class RewardNet(nn.Module):
     Should have batch normalizatoin and dropout on conv layers
     
     """
-    def __init__(self, l2 = 0.01, env_type = 'procgen'):
+    def __init__(self, l2 = 0.01, dropout = 0.8, env_type = 'procgen'):
         super().__init__()
         self.env_type = env_type
         if env_type == 'procgen':
             self.model = nn.Sequential(
                 #conv1
-                nn.Dropout2d(p=0.5),
+                nn.Dropout2d(p=dropoutr),
                 nn.Conv2d(3, 16, 3, stride=1),
                 nn.MaxPool2d(4, stride=2),
                 nn.LeakyReLU(),
                 nn.BatchNorm2d(16, momentum = 0.01),
                 #conv2
-                nn.Dropout2d(p=0.5),
+                nn.Dropout2d(p=dropout),
                 nn.Conv2d(16, 16, 3, stride=1),
                 nn.MaxPool2d(4, stride=2),
                 nn.LeakyReLU(),
                 nn.BatchNorm2d(16, momentum = 0.01),
                 #conv3
-                nn.Dropout2d(p=0.5),
+                nn.Dropout2d(p=dropout),
                 nn.Conv2d(16, 16, 3, stride=1),
                 nn.LeakyReLU(),
                 nn.BatchNorm2d(16, momentum = 0.01),
@@ -138,22 +135,22 @@ class RewardNet(nn.Module):
         elif env_type == 'atari':
             self.model = nn.Sequential(
                 #conv1
-                nn.Dropout2d(p=0.5),
+                nn.Dropout2d(p=dropout),
                 nn.Conv2d(4, 16, 7, stride=3),
                 nn.LeakyReLU(),
                 nn.BatchNorm2d(16, momentum = 0.01),
                 #conv2
-                nn.Dropout2d(p=0.5),
+                nn.Dropout2d(p=dropout),
                 nn.Conv2d(16, 16, 5, stride=2),
                 nn.LeakyReLU(),
                 nn.BatchNorm2d(16, momentum = 0.01),
                 #conv3
-                nn.Dropout2d(p=0.5),
+                nn.Dropout2d(p=dropout),
                 nn.Conv2d(16, 16, 3, stride=1),
                 nn.LeakyReLU(),
                 nn.BatchNorm2d(16, momentum = 0.01),
                 #conv4
-                nn.Dropout2d(p=0.5),
+                nn.Dropout2d(p=dropout),
                 nn.Conv2d(16, 16, 3, stride=1),
                 nn.LeakyReLU(),
                 nn.BatchNorm2d(16, momentum = 0.01),
@@ -175,7 +172,7 @@ class RewardNet(nn.Module):
         # if self.env_type == 'procgen':
         clip = clip.permute(0, 3, 1, 2)
 
-        clip = clip / 255 + clip.new(clip.size()).normal_(0,0.03)
+        clip = clip / 255.0 + clip.new(clip.size()).normal_(0,0.03)
 
         return torch.sum(self.model(clip))
 
@@ -183,7 +180,7 @@ class RewardNet(nn.Module):
         self.model.eval()
         # if self.env_type == 'procgen':
         x = x.permute(0,3,1,2)
-        x = x / 255
+        x = x / 255.0
 
         rewards = torch.squeeze(self.model(x)).detach().cpu().numpy()
 
@@ -263,6 +260,9 @@ def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'c
     optimizer = optim.Adam(reward_model.parameters(), lr= 0.0003, weight_decay = weight_decay)
     
     losses = []
+    
+    print(f'min_loss : {data_buffer.val_loss_lb:6.4f},')
+
     for batch_i in range(num_batches):
         annotations = data_buffer.sample_batch(batch_size)
         loss = 0
@@ -277,7 +277,10 @@ def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'c
         loss = loss / batch_size
         losses.append(loss.item())
 
-        if batch_i % 100 == 0:
+        loss.backward()
+        optimizer.step()
+
+        if (batch_i % 100 == 0) and (batch_i != 0):
             val_loss = calc_val_loss(reward_model, data_buffer, device) 
             av_loss = np.mean(losses[-100:])
             #Adaptive L2 reg
@@ -290,10 +293,9 @@ def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'c
                     g['weight_decay'] = g['weight_decay'] / 1.1   
                     weight_decay = g['weight_decay']
 
-            print(f'batch : {batch_i}, loss : {av_loss:6.4f}, val loss: {val_loss:6.4f}, min_loss : {data_buffer.val_loss_lb:6.4f}, L2 : {weight_decay:8.6f}')
+            print(f'batch : {batch_i}, loss : {av_loss:6.4f}, val loss: {val_loss:6.4f},  L2 : {weight_decay:8.6f}')
             
-        loss.backward()
-        optimizer.step()
+        
 
     reward_model.l2 = weight_decay   
     reward_model.set_mean_std(data_buffer.get_all_pairs())
@@ -303,7 +305,7 @@ def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'c
     
 
 @timeitt
-def train_policy(venv_fn, reward_model, policy, num_steps, device, rl_steps, log_name):
+def train_policy(venv_fn, reward_model, policy, num_steps, device, rl_steps, log_name, callback):
     '''
     Creates new environment by wrapping the env, with Vec_reward_wrapper given the reward_model.
     Traines policy in the new envirionment for num_steps
@@ -325,7 +327,7 @@ def train_policy(venv_fn, reward_model, policy, num_steps, device, rl_steps, log
     policy._setup_lr_schedule()
 
     # reset_num timesteps allows having single TB_log when calling .learn() multiple times
-    policy.learn(num_steps, reset_num_timesteps = False, tb_log_name=log_name)
+    policy.learn(num_steps, reset_num_timesteps = False, tb_log_name=log_name, callback = callback)
 
     return policy
    
@@ -347,7 +349,7 @@ def collect_annotations(venv, policy, num_pairs, clip_size):
 
     obs_b, *_ = venv.step(n_envs*[0])
     #collecting at least 
-    while len(clip_pool) < num_pairs * 2:
+    while len(clip_pool) < 10 * num_pairs * 2:
         clip_returns = n_envs * [0]
         for _ in range(clip_size):
             # _states are only useful when using LSTM policies
@@ -398,11 +400,11 @@ def main():
     parser.add_argument('--clip_size', type=int, default=25)
     parser.add_argument('--total_timesteps', type=int, default=5*10**7)
     parser.add_argument('--n_labels', type=int, default=6800)
-    parser.add_argument('--steps_per_iter', type=int, default=10**5)
-    parser.add_argument('--pairs_per_iter', type=int, default=10**4)
+    parser.add_argument('--steps_per_iter', type=int, default=5*10**4)
+    parser.add_argument('--pairs_per_iter', type=int, default=5*10**3)
     parser.add_argument('--pairs_in_batch', type=int, default=16)
     parser.add_argument('--l2', type=float, default=0.0001)
-
+    parser.add_argument('--dropout', type=float, default=0.8)
 
     args = parser.parse_args()
 
@@ -413,6 +415,8 @@ def main():
 
 
     run_dir, monitor_dir, video_dir = setup_logging(args)
+    global LOG_TIME
+    LOG_TIME = os.path.join(run_dir, "TIME_LOG.txt")
 
     if args.resume_training:
         reward_model, policy, data_buffer, i_num = load_state(run_dir)
@@ -431,22 +435,20 @@ def main():
 
     atari_name = args.env_name + "NoFrameskip-v4"
 
-    venv_fn  =  lambda: make_atari_continuous(atari_name, n_envs=16, monitor_dir = monitor_dir)
+    venv_fn  =  lambda: make_atari_continuous(atari_name, n_envs=16)
 
     annotation_env = make_atari_continuous(atari_name, n_envs=16)  
     annotation_env.reset()
 
 
-
-    eval_env_fn = lambda: make_atari_default(atari_name, n_envs=16, seed = 0, vec_env_cls = SubprocVecEnv)
-
-    video_env_fn= lambda: make_atari_default(atari_name, vec_env_cls = DummyVecEnv)
+    # eval_env_fn = lambda: make_atari_default(atari_name, n_envs=16, seed = 0, vec_env_cls = SubprocVecEnv)
+    # video_env_fn= lambda: make_atari_default(atari_name, vec_env_cls = DummyVecEnv)
 
     #in case this is a fresh run 
     if not args.resume_training:
        
         policy = A2C('CnnPolicy', venv_fn(), verbose=1, tensorboard_log="TB_LOGS", ent_coef=0.01, learning_rate = 0.0007)
-        reward_model = RewardNet(l2= args.l2, env_type = args.env_type)
+        reward_model = RewardNet(l2= args.l2, dropout = args.dropout, env_type = args.env_type)
         data_buffer = AnnotationBuffer()
         store_args(args, run_dir)   
 
@@ -460,28 +462,20 @@ def main():
 
         print(f'Buffer size = {data_buffer.current_size}')
         
-        reward_model, rm_train_stats = train_reward(reward_model, data_buffer, args.init_train_size, args.pairs_in_batch) 
-        policy = train_policy(venv_fn, reward_model, policy, args.steps_per_iter, device, 0,  args.log_name)
+        reward_model, rm_train_stats = train_reward(reward_model, data_buffer, args.init_train_size, args.pairs_in_batch)
+        callback = TensorboardCallback((data_buffer.current_size, data_buffer.loss_lb, 0, rm_train_stats))
+        policy = train_policy(venv_fn, reward_model, policy, args.steps_per_iter, device, 0,  args.log_name, callback)
 
         save_state(run_dir, 0, reward_model, policy, data_buffer)
 
-        record_video(policy, video_env_fn(), video_dir, 4000, f"0_ITER_{args.env_name}")
-        # true_performance = eval_policy(venv_fn(), policy, n_eval_episodes=50)
-        # proxy_performance = eval_policy(test_env, policy, n_eval_episodes=50)
-
-        true_performance = 0 #eval_policy(eval_env_fn(), policy, n_eval_episodes=100)
-        proxy_performance = 0
-
-        print(f'True policy preformance = {true_performance}') 
-        print(f'Proxy policy preformance = {proxy_performance}') 
-
+        true_performance = safe_mean([ep_info["r"] for ep_info in policy.ep_info_buffer])
 
         t_finish = time.time()
         iter_time = t_finish - t_start
-        log_iter(run_dir, args.steps_per_iter, data_buffer, true_performance, proxy_performance, rm_train_stats, iter_time)
+        log_iter(run_dir, args.steps_per_iter, data_buffer, true_performance, 0, rm_train_stats, iter_time)
         
         print(f'Iteration took {time.gmtime(t_finish - t_start).tm_min} min {time.gmtime(t_finish - t_start).tm_sec} sec')
-        os.rename(monitor_dir, monitor_dir + '_' + str(0))        
+        # os.rename(monitor_dir, monitor_dir + '_' + str(0))        
         i_num = 1 
 
 
@@ -494,41 +488,49 @@ def main():
         t_start = time.time()
         print(f'================== iter : {i} ====================')
 
+
         rl_steps = (i + 1) * args.steps_per_iter
         # decaying the number of pairs to collect each 10% of the total agent timesteps
-        if rl_steps % (5*10**6) == 0:
-            num_pairs = round(init_num_pairs / (rl_steps/(args.total_timesteps/10) + 1))
 
-        # # periodically reinitializing the environment to avoid "env needs reset" error
-        # if max(annotation_env.env_method('get_total_steps')) > 2e4:
-        #     annotation_env = annotation_env_fn()
+        num_pairs = round(init_num_pairs / (rl_steps/(args.total_timesteps/10) + 1))
+
 
         annotations = collect_annotations(annotation_env, policy, num_pairs, args.clip_size)
         data_buffer.add(annotations)   
 
         print(f'Buffer size = {data_buffer.current_size}')
         
-        reward_model, rm_train_stats = train_reward(reward_model, data_buffer, args.pairs_per_iter, args.pairs_in_batch) 
-        policy = train_policy(venv_fn, reward_model, policy, args.steps_per_iter, device, rl_steps, args.log_name)
-        save_state(run_dir, i, reward_model, policy, data_buffer)
+        reward_model, rm_train_stats = train_reward(reward_model, data_buffer, args.pairs_per_iter, args.pairs_in_batch)
 
-        record_video(policy, video_env_fn(), video_dir, 4000, f"{i}_ITER00_{args.env_name}")
+        #TODO : pretify passing data to callback
+        callback = TensorboardCallback((data_buffer.current_size, data_buffer.loss_lb, 0, rm_train_stats))
+        policy = train_policy(venv_fn, reward_model, policy, args.steps_per_iter, device, rl_steps, args.log_name, callback)
+
+        # storing the state every 1M steps
+        if rl_steps % (10**6) == 0:
+            save_state(run_dir, i, reward_model, policy, data_buffer)
+
+        # record_video(policy, video_env_fn(), video_dir, 4000, f"{i}_ITER00_{args.env_name}")
         # true_performance = eval_policy(venv_fn(), policy, n_eval_episodes=50)
         # proxy_performance = eval_policy(test_env, policy, n_eval_episodes=50)
 
-        true_performance = 0 #eval_policy(eval_env_fn(), policy, n_eval_episodes=100)
-        proxy_performance = 0
+        true_performance = safe_mean([ep_info["r"] for ep_info in policy.ep_info_buffer])
 
-        print(f'True policy preformance = {true_performance}') 
-        print(f'Proxy policy preformance = {proxy_performance}') 
-
+        # print(f'True policy preformance = {true_performance}') 
+        # print(f'Proxy policy preformance = {proxy_performance}') 
 
         t_finish = time.time()
         iter_time = t_finish - t_start
-        log_iter(run_dir, rl_steps, data_buffer, true_performance, proxy_performance, rm_train_stats, iter_time)
-
-        print(f'Iteration took {time.gmtime(iter_time).tm_min} min {time.gmtime(iter_time).tm_sec} sec')
-        os.rename(monitor_dir, monitor_dir + '_' + str(i))        
+        log_iter(run_dir, rl_steps, data_buffer, true_performance, 0 , rm_train_stats, iter_time)
+        # os.rename(monitor_dir, monitor_dir + '_' + str(i))   
+        
+        if LOG_TIME:
+            with open(LOG_TIME, 'a') as f:
+                f.write(f'Iteration took {time.gmtime(iter_time).tm_min} min {time.gmtime(iter_time).tm_sec} sec\n')
+                f.write(f'================== iter : {i+1} ====================\n')
+        else:
+            print(f'Iteration took {time.gmtime(iter_time).tm_min} min {time.gmtime(iter_time).tm_sec} sec')
+     
 
 if __name__ == '__main__':
     main()
