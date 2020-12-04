@@ -110,7 +110,7 @@ class RewardNet(nn.Module):
         if env_type == 'procgen':
             self.model = nn.Sequential(
                 #conv1
-                nn.Dropout2d(p=dropoutr),
+                nn.Dropout2d(p=dropout),
                 nn.Conv2d(3, 16, 3, stride=1),
                 nn.MaxPool2d(4, stride=2),
                 nn.LeakyReLU(),
@@ -439,7 +439,7 @@ def main():
 
     annotation_env = make_atari_continuous(atari_name, n_envs=16)  
     annotation_env.reset()
-
+    iter_time = 0
 
     # eval_env_fn = lambda: make_atari_default(atari_name, n_envs=16, seed = 0, vec_env_cls = SubprocVecEnv)
     # video_env_fn= lambda: make_atari_default(atari_name, vec_env_cls = DummyVecEnv)
@@ -463,7 +463,7 @@ def main():
         print(f'Buffer size = {data_buffer.current_size}')
         
         reward_model, rm_train_stats = train_reward(reward_model, data_buffer, args.init_train_size, args.pairs_in_batch)
-        callback = TensorboardCallback((data_buffer.current_size, data_buffer.loss_lb, 0, rm_train_stats))
+        callback = TensorboardCallback((data_buffer.current_size, data_buffer.loss_lb, iter_time, rm_train_stats))
         policy = train_policy(venv_fn, reward_model, policy, args.steps_per_iter, device, 0,  args.log_name, callback)
 
         save_state(run_dir, 0, reward_model, policy, data_buffer)
@@ -503,7 +503,7 @@ def main():
         reward_model, rm_train_stats = train_reward(reward_model, data_buffer, args.pairs_per_iter, args.pairs_in_batch)
 
         #TODO : pretify passing data to callback
-        callback = TensorboardCallback((data_buffer.current_size, data_buffer.loss_lb, 0, rm_train_stats))
+        callback = TensorboardCallback((data_buffer.current_size, data_buffer.loss_lb, iter_time, rm_train_stats))
         policy = train_policy(venv_fn, reward_model, policy, args.steps_per_iter, device, rl_steps, args.log_name, callback)
 
         # storing the state every 1M steps
