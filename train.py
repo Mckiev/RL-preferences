@@ -104,7 +104,7 @@ class RewardNet(nn.Module):
     Should have batch normalizatoin and dropout on conv layers
     
     """
-    def __init__(self, l2 = 0.01, dropout = 0.8, env_type = 'procgen'):
+    def __init__(self, l2 = 0.01, dropout = 0.2, env_type = 'procgen'):
         super().__init__()
         self.env_type = env_type
         if env_type == 'procgen':
@@ -172,7 +172,7 @@ class RewardNet(nn.Module):
         # if self.env_type == 'procgen':
         clip = clip.permute(0, 3, 1, 2)
 
-        clip = clip / 255.0 + clip.new(clip.size()).normal_(0,0.03)
+        clip = clip / 255.0 + clip.new(clip.size()).normal_(0,0.1)
 
         return torch.sum(self.model(clip))
 
@@ -404,7 +404,7 @@ def main():
     parser.add_argument('--pairs_per_iter', type=int, default=5*10**3)
     parser.add_argument('--pairs_in_batch', type=int, default=16)
     parser.add_argument('--l2', type=float, default=0.0001)
-    parser.add_argument('--dropout', type=float, default=0.8)
+    parser.add_argument('--dropout', type=float, default=0.2)
 
     args = parser.parse_args()
 

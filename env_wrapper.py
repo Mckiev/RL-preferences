@@ -206,7 +206,7 @@ class ContWrapper(AtariWrapper):
         
         # Replace done with negative reward and keep the episode going
         if done:
-            reward = -2
+            reward = -4
             done = False
             self.env.reset()
         # Overwrite the done signal when 
