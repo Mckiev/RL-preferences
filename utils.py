@@ -6,6 +6,7 @@ import argparse
 import numpy as np
 import gym
 from stable_baselines3.common.vec_env import VecVideoRecorder, VecFrameStack
+import torch
 
 def timeitt(method):
     def timed(*args, **kw):

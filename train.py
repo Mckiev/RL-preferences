@@ -257,6 +257,7 @@ def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'c
 
     reward_model.to(device)
     weight_decay = reward_model.l2
+    av_loss = val_loss = 0
     optimizer = optim.Adam(reward_model.parameters(), lr= 0.0003, weight_decay = weight_decay)
     
     losses = []
@@ -311,16 +312,6 @@ def train_policy(venv_fn, reward_model, policy, num_steps, device, rl_steps, log
     Traines policy in the new envirionment for num_steps
     Returns retrained policy
     '''
-
-    #creating the environment with reward predicted  from reward_model
-    reward_model.to(device)
-    proxy_reward_function = lambda x: reward_model.rew_fn(torch.from_numpy(x).float().to(device))
-    proxy_reward_venv = Vec_reward_wrapper(venv_fn(), proxy_reward_function)
-
-    # resetting the environment to avoid rasing mistakes from reset_num_timesteps
-    proxy_reward_venv.reset()
-    policy.set_env(proxy_reward_venv)
-
     
     # manual hacky implementation of the learning rate
     policy.learning_rate = 0.0007*(1 - rl_steps/8e7)
@@ -414,13 +405,41 @@ def main():
     print(f'\n Using {device} for training')
 
 
+    
     run_dir, monitor_dir, video_dir = setup_logging(args)
     global LOG_TIME
     LOG_TIME = os.path.join(run_dir, "TIME_LOG.txt")
 
     if args.resume_training:
         reward_model, policy, data_buffer, i_num = load_state(run_dir)
-        args = load_args(args)
+        args = load_args(args)    
+    
+    atari_name = args.env_name + "NoFrameskip-v4"
+    venv_fn = lambda: make_atari_continuous(atari_name, n_envs=16)
+    annotation_env = make_atari_continuous(atari_name, n_envs=16)  
+    annotation_env.reset()
+    iter_time = 0
+
+    if not args.resume_training:
+        policy = A2C('CnnPolicy', venv_fn(), verbose=1, tensorboard_log="TB_LOGS", ent_coef=0.01, learning_rate = 0.0007)
+        reward_model = RewardNet(l2= args.l2, dropout = args.dropout, env_type = args.env_type)
+        data_buffer = AnnotationBuffer()
+        store_args(args, run_dir)  
+
+
+
+
+
+
+
+    #creating the environment with reward predicted  from reward_model
+    reward_model.to(device)
+    proxy_reward_function = lambda x: reward_model.rew_fn(torch.from_numpy(x).float().to(device))
+    proxy_reward_venv = Vec_reward_wrapper(venv_fn(), proxy_reward_function)
+
+    # resetting the environment to avoid rasing mistakes from reset_num_timesteps
+    proxy_reward_venv.reset()
+    policy.set_env(proxy_reward_venv)
 
     # #initializing objects
     # if args.env_type == 'procgen':
@@ -433,13 +452,9 @@ def main():
     # elif args.env_type == 'atari':
     #     env_fn = lambda: VecFrameStack(ContWrapper(gym.make(atari_name)), n_stack=4)
 
-    atari_name = args.env_name + "NoFrameskip-v4"
 
-    venv_fn  =  lambda: make_atari_continuous(atari_name, n_envs=16)
 
-    annotation_env = make_atari_continuous(atari_name, n_envs=16)  
-    annotation_env.reset()
-    iter_time = 0
+
 
     # eval_env_fn = lambda: make_atari_default(atari_name, n_envs=16, seed = 0, vec_env_cls = SubprocVecEnv)
     # video_env_fn= lambda: make_atari_default(atari_name, vec_env_cls = DummyVecEnv)
@@ -447,11 +462,6 @@ def main():
     #in case this is a fresh run 
     if not args.resume_training:
        
-        policy = A2C('CnnPolicy', venv_fn(), verbose=1, tensorboard_log="TB_LOGS", ent_coef=0.01, learning_rate = 0.0007)
-        reward_model = RewardNet(l2= args.l2, dropout = args.dropout, env_type = args.env_type)
-        data_buffer = AnnotationBuffer()
-        store_args(args, run_dir)   
-
         t_start = time.time()
         print(f'================== Initial iter ====================')
 
