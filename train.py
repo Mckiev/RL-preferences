@@ -213,7 +213,7 @@ class RewardNet(nn.Module):
 
 def rm_loss_func(ret0, ret1, label, device = 'cuda:0'):
     '''custom loss function, to allow for float labels
-    unlike nn.CrossEntropyLoss'''
+    unlike in nn.CrossEntropyLoss'''
 
     #compute log(p1), log(p2) where p_i = exp(ret_i) / (exp(ret_1) + exp(ret_2))
     sm = nn.Softmax(dim = 0)
@@ -232,8 +232,6 @@ def calc_val_loss(reward_model, data_buffer, device):
     '''
     computes average loss over the validation set
     '''
-
-    reward_model.eval()
 
     loss = 0
     num_pairs = 0
@@ -269,9 +267,9 @@ def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'c
     # and is being adjusted throughout the training
     weight_decay = reward_model.l2
     av_loss = val_loss = 0
-    optimizer = optim.Adam(reward_model.parameters(), lr= 0.0003, weight_decay = weight_decay)
-    
     losses = []
+
+    optimizer = optim.Adam(reward_model.parameters(), lr= 0.0003, weight_decay = weight_decay)
     
     print(f'Validation Loss lower bound : {data_buffer.val_loss_lb:6.4f},')
 
@@ -319,14 +317,13 @@ def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'c
     
 
 @timeitt
-def train_policy(venv_fn, reward_model, policy, num_steps, device, rl_steps, log_name, callback):
+def train_policy(policy, num_steps, rl_steps, log_name, callback):
     '''
-    Creates new environment by wrapping the env, with Vec_reward_wrapper given the reward_model.
-    Traines policy in the new envirionment for num_steps
+    Traines policy for num_steps
     Returns retrained policy
     '''
     
-    # manual hacky implementation of the learning rate
+    # Implementation of the learning rate decay
     policy.learning_rate = 0.0007*(1 - rl_steps/8e7)
     policy._setup_lr_schedule()
 
@@ -338,10 +335,10 @@ def train_policy(venv_fn, reward_model, policy, num_steps, device, rl_steps, log
 
 @timeitt
 def collect_annotations(venv, policy, num_pairs, clip_size):
-    '''Collects episodes using the provided policy, slices them to snippets of given length,
-    selects pairs randomly and annotates 
-    Returns a list of named tuples (clip0, clip1, label), where label is float in [0,1]
-
+    '''
+    Collects episodes using the provided policy, slices them to snippets of given length,
+    selects pairs randomly and adds a label based on which snipped had larger reward
+    Returns a list of lists [clip0, clip1, label], where label is float in [0,1]
     '''
 
     n_envs = venv.num_envs
@@ -352,7 +349,8 @@ def collect_annotations(venv, policy, num_pairs, clip_size):
     # raises error if you happen to call reset one step before dying
 
     obs_b, *_ = venv.step(n_envs*[0])
-    #collecting at least 
+
+    #collecting 10x as many observations as needed for randomization
     while len(clip_pool) < 10 * num_pairs * 2:
         clip_returns = n_envs * [0]
         for _ in range(clip_size):
@@ -364,7 +362,7 @@ def collect_annotations(venv, policy, num_pairs, clip_size):
             clip_returns += r_b
 
         obs_stack = np.array(obs_stack)
-        clip_pool.extend([dict( observations = obs_stack[:, i, :], sum_rews = clip_returns[i]) for i in range(n_envs)])
+        clip_pool.extend([dict(observations = obs_stack[:, i, :], sum_rews = clip_returns[i]) for i in range(n_envs)])
 
         obs_stack = []
 
@@ -377,8 +375,6 @@ def collect_annotations(venv, policy, num_pairs, clip_size):
         elif clip0['sum_rews'] < clip1['sum_rews']:
             label = 1.0 
         elif clip0['sum_rews'] == clip1['sum_rews']:
-            # # skipping clips with same rewards for now
-            # continue
             label = 0.5
 
         data.append([np.array(clip0['observations']), np.array(clip1['observations']), label])
@@ -400,14 +396,14 @@ def main():
     parser.add_argument('--resume_training', action='store_true')
 
     parser.add_argument('--init_buffer_size', type=int, default=500)
-    parser.add_argument('--init_train_size', type=int, default=10**5)
-    parser.add_argument('--clip_size', type=int, default=25)
-    parser.add_argument('--total_timesteps', type=int, default=5*10**7)
-    parser.add_argument('--n_labels', type=int, default=6800)
-    parser.add_argument('--steps_per_iter', type=int, default=5*10**4)
-    parser.add_argument('--pairs_per_iter', type=int, default=5*10**3)
-    parser.add_argument('--pairs_in_batch', type=int, default=16)
-    parser.add_argument('--l2', type=float, default=0.0001)
+    parser.add_argument('--init_train_size', type=int, default=10**5, help='number of labels to process during initial training of the reward model')
+    parser.add_argument('--clip_size', type=int, default=25, help='number of frames in each clip generated for comparison')
+    parser.add_argument('--total_timesteps', type=int, default=5*10**7, help='total number of RL timesteps to be taken')
+    parser.add_argument('--n_labels', type=int, default=6800, help="total number of labels to collect throughout the training")
+    parser.add_argument('--steps_per_iter', type=int, default=5*10**4, help="number of RL steps taken on each iteration")
+    parser.add_argument('--pairs_per_iter', type=int, default=5*10**3, help='number of labels the reward model is trained on each iteration')
+    parser.add_argument('--pairs_in_batch', type=int, default=16, help='batch size for reward model training')
+    parser.add_argument('--l2', type=float, default=0.0001, help='initial l2 regularization for a reward model')
     parser.add_argument('--dropout', type=float, default=0.2)
 
     args = parser.parse_args()
@@ -423,6 +419,10 @@ def main():
     global LOG_TIME
     LOG_TIME = os.path.join(run_dir, "TIME_LOG.txt")
 
+
+    ### Initializing objects ###
+    
+    # If resuming some earlier training run - load stored objects
     if args.resume_training:
         reward_model, policy, data_buffer, i_num = load_state(run_dir)
         args = load_args(args)    
@@ -433,61 +433,42 @@ def main():
     annotation_env.reset()
     iter_time = 0
 
+    # In case this is a fresh experiment - initialize fresh objects
     if not args.resume_training:
         policy = A2C('CnnPolicy', venv_fn(), verbose=1, tensorboard_log="TB_LOGS", ent_coef=0.01, learning_rate = 0.0007)
         reward_model = RewardNet(l2= args.l2, dropout = args.dropout, env_type = args.env_type)
         data_buffer = AnnotationBuffer()
         store_args(args, run_dir)  
 
-
-
-
-
-
-
-    #creating the environment with reward predicted  from reward_model
+    #creating the environment with reward replaced by the prediction from reward_model
     reward_model.to(device)
     proxy_reward_function = lambda x: reward_model.rew_fn(torch.from_numpy(x).float().to(device))
     proxy_reward_venv = Vec_reward_wrapper(venv_fn(), proxy_reward_function)
 
-    # resetting the environment to avoid rasing mistakes from reset_num_timesteps
+    # resetting the environment to avoid raising error from reset_num_timesteps
     proxy_reward_venv.reset()
     policy.set_env(proxy_reward_venv)
-
-    # #initializing objects
-    # if args.env_type == 'procgen':
-    #     env_fn = lambda: Gym_procgen_continuous(
-    #         env_name = args.env_name, 
-    #         distribution_mode = args.distribution_mode, 
-    #         num_levels = args.num_levels, 
-    #         start_level = args.start_level
-    #         )
-    # elif args.env_type == 'atari':
-    #     env_fn = lambda: VecFrameStack(ContWrapper(gym.make(atari_name)), n_stack=4)
-
-
-
 
 
     # eval_env_fn = lambda: make_atari_default(atari_name, n_envs=16, seed = 0, vec_env_cls = SubprocVecEnv)
     # video_env_fn= lambda: make_atari_default(atari_name, vec_env_cls = DummyVecEnv)
 
-    #in case this is a fresh run 
+    # in case this is a fresh run, collect init_buffer_size samples to AnnotationBuffer
+    # and train the reward model on init_train_size number of samples with replacement
     if not args.resume_training:
        
         t_start = time.time()
         print(f'================== Initial iter ====================')
 
-        prev_size = data_buffer.current_size     
-        
         annotations = collect_annotations(annotation_env, policy, args.init_buffer_size, args.clip_size)
         data_buffer.add(annotations)   
 
         print(f'Buffer size = {data_buffer.current_size}')
         
         reward_model, rm_train_stats = train_reward(reward_model, data_buffer, args.init_train_size, args.pairs_in_batch)
+        # this callback adds values to TensorBoard logs for easier plotting
         callback = TensorboardCallback((data_buffer.current_size, data_buffer.loss_lb, iter_time, rm_train_stats))
-        policy = train_policy(venv_fn, reward_model, policy, args.steps_per_iter, device, 0,  args.log_name, callback)
+        policy = train_policy(policy, args.steps_per_iter, 0,  args.log_name, callback)
 
         save_state(run_dir, 0, reward_model, policy, data_buffer)
 
@@ -498,12 +479,13 @@ def main():
         log_iter(run_dir, args.steps_per_iter, data_buffer, true_performance, 0, rm_train_stats, iter_time)
         
         print(f'Iteration took {time.gmtime(t_finish - t_start).tm_min} min {time.gmtime(t_finish - t_start).tm_sec} sec')
-        # os.rename(monitor_dir, monitor_dir + '_' + str(0))        
+        
+        # i_num is the number of training iterations taken      
         i_num = 1 
 
 
     num_iters = int(args.total_timesteps / args.steps_per_iter)
-    # initial number of pairs to label 
+    # calculating the initial number of pairs to collect 
     num_pairs = init_num_pairs = round((args.n_labels - args.init_buffer_size) / 0.292 / num_iters) 
 
     print('init_num_pairs = {}'.format(init_num_pairs))
@@ -511,12 +493,9 @@ def main():
         t_start = time.time()
         print(f'================== iter : {i} ====================')
 
-
-        rl_steps = (i + 1) * args.steps_per_iter
-        # decaying the number of pairs to collect each 10% of the total agent timesteps
-
+        rl_steps = i * args.steps_per_iter
+        # decaying the number of pairs to collect
         num_pairs = round(init_num_pairs / (rl_steps/(args.total_timesteps/10) + 1))
-
 
         annotations = collect_annotations(annotation_env, policy, num_pairs, args.clip_size)
         data_buffer.add(annotations)   
@@ -527,9 +506,10 @@ def main():
 
         #TODO : pretify passing data to callback
         callback = TensorboardCallback((data_buffer.current_size, data_buffer.loss_lb, iter_time, rm_train_stats))
-        policy = train_policy(venv_fn, reward_model, policy, args.steps_per_iter, device, rl_steps, args.log_name, callback)
+        policy = train_policy(policy, args.steps_per_iter, rl_steps, args.log_name, callback)
 
         # storing the state every 1M steps
+        # this assumes that steps_per_iter devides 10**6
         if rl_steps % (10**6) == 0:
             save_state(run_dir, i, reward_model, policy, data_buffer)
 
@@ -544,8 +524,7 @@ def main():
 
         t_finish = time.time()
         iter_time = t_finish - t_start
-        log_iter(run_dir, rl_steps, data_buffer, true_performance, 0 , rm_train_stats, iter_time)
-        # os.rename(monitor_dir, monitor_dir + '_' + str(i))   
+        log_iter(run_dir, rl_steps, data_buffer, true_performance, 0 , rm_train_stats, iter_time) 
         
         if LOG_TIME:
             with open(LOG_TIME, 'a') as f:
