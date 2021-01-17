@@ -19,25 +19,22 @@ import random
 import argparse, pickle
 import multiprocessing
 
-# import tensorflow as tf
 import os, time, datetime, sys
-# tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
-# os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
 class AnnotationBuffer(object):
     """Buffer of annotated pairs of clips
 
     Each entry is ([clip0, clip1], label)
     clip0, clip2 : lists of observations
-    label : float in range [0,1] corresponding to which clip is preferred
-    label can also be 0.5 meaning clips are equal, or e.g. 0.95 corresponding
-    to noize in labeling
+    label : float in range {0, 0.5, 1} corresponding to which clip is preferred,
+    where 0.5 means that clips are equal
     """
 
     def __init__(self, max_size=3000):
         self.max_size = max_size
         self.current_size = 0
 
-        #calculate max
+        #calculate max train and validation set sizes based on total max_size
         self.train_max_size = int(self.max_size * (1 - 1/np.exp(1)))
         self.val_max_size = self.max_size - self.train_max_size
 
@@ -65,7 +62,7 @@ class AnnotationBuffer(object):
         self.current_size += len(data)
 
         # Only recent samples are available for training
-        # such that total training data size < max_size   
+        # such that total training data size <= max_size   
         self.train_data = self.train_data_all[-self.train_max_size:]
         self.val_data = self.val_data_all[-self.val_max_size:]
 
@@ -84,6 +81,7 @@ class AnnotationBuffer(object):
         '''Train set loss lower bound'''
         even_pref_freq = np.mean([label == 0.5 for (c1, c2, label) in self.train_data])
 
+        #taking into account that label noize is used
         return -((1 - even_pref_freq) * np.log(0.95) + even_pref_freq * np.log(0.5))
 
     @property
@@ -91,6 +89,7 @@ class AnnotationBuffer(object):
         '''Validation set loss lower bound'''
         even_pref_freq = np.mean([label == 0.5 for (c1, c2, label) in self.val_data])
 
+        #taking into account that label noize is used
         return -((1 - even_pref_freq) * np.log(0.95) + even_pref_freq * np.log(0.5))
 
     def get_all_pairs(self):
@@ -167,32 +166,40 @@ class RewardNet(nn.Module):
 
     def forward(self, clip):
         '''
-        predicts the sum of rewards of the clip
+        predicts the (!) unnormalized sum of rewards for a given clip
+        used only for assigning preferences, so normalization is unnecesary
         '''
         # if self.env_type == 'procgen':
         clip = clip.permute(0, 3, 1, 2)
 
+        # normalizing observations to be in [0,1] and adding noize
         clip = clip / 255.0 + clip.new(clip.size()).normal_(0,0.1)
 
         return torch.sum(self.model(clip))
 
     def rew_fn(self, x):
-        self.model.eval()
+        self.eval()
         # if self.env_type == 'procgen':
         x = x.permute(0,3,1,2)
+
+        # we don't add noize during evaluation
         x = x / 255.0
 
         rewards = torch.squeeze(self.model(x)).detach().cpu().numpy()
 
+        # normalizing output to be 0 mean, 0.05 std over the annotation buffer
         rewards = 0.05 * (rewards - self.mean) / self.std
 
         return rewards
-
 
     def save(self, path):
         torch.save(self.model, path)
 
     def set_mean_std(self, pairs, device = 'cuda:0'):
+        '''
+        computes the mean and std over provided pairs data, 
+        and sets the relevant properties 
+        '''
         rewards = []
         for clip0, clip1 , label in pairs:
             rewards.extend(self.rew_fn(torch.from_numpy(clip0).float().to(device)))
@@ -203,6 +210,7 @@ class RewardNet(nn.Module):
 
 
 
+
 def rm_loss_func(ret0, ret1, label, device = 'cuda:0'):
     '''custom loss function, to allow for float labels
     unlike nn.CrossEntropyLoss'''
@@ -210,19 +218,20 @@ def rm_loss_func(ret0, ret1, label, device = 'cuda:0'):
     #compute log(p1), log(p2) where p_i = exp(ret_i) / (exp(ret_1) + exp(ret_2))
     sm = nn.Softmax(dim = 0)
     preds = sm(torch.stack((ret0, ret1)))
-    #adding label noize
+    #getting log of predictions after adding label noize
     log_preds = torch.log(preds * 0.95 + 0.05)
 
     #compute cross entropy given the label
     target = torch.tensor([1-label, label]).to(device)
     loss = - torch.sum(log_preds * target)
 
-
-
     return loss
 
 @timeitt
 def calc_val_loss(reward_model, data_buffer, device):
+    '''
+    computes average loss over the validation set
+    '''
 
     reward_model.eval()
 
@@ -241,7 +250,7 @@ def calc_val_loss(reward_model, data_buffer, device):
 
 
 @timeitt
-def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'cuda:0', obs_noize = 0.03):
+def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'cuda:0'):
     '''
     Traines a given reward_model for num_batches from data_buffer
     Returns the new reward_model
@@ -256,15 +265,17 @@ def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'c
     num_batches = int(num_samples / batch_size)
 
     reward_model.to(device)
+    # current weight decay is stored as the reward_model property
+    # and is being adjusted throughout the training
     weight_decay = reward_model.l2
     av_loss = val_loss = 0
     optimizer = optim.Adam(reward_model.parameters(), lr= 0.0003, weight_decay = weight_decay)
     
     losses = []
     
-    print(f'min_loss : {data_buffer.val_loss_lb:6.4f},')
+    print(f'Validation Loss lower bound : {data_buffer.val_loss_lb:6.4f},')
 
-    for batch_i in range(num_batches):
+    for batch_i in range(1, num_batches + 1):
         annotations = data_buffer.sample_batch(batch_size)
         loss = 0
         optimizer.zero_grad()
@@ -281,10 +292,11 @@ def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'c
         loss.backward()
         optimizer.step()
 
-        if (batch_i % 100 == 0) and (batch_i != 0):
+        if batch_i % 100 == 0:
             val_loss = calc_val_loss(reward_model, data_buffer, device) 
             av_loss = np.mean(losses[-100:])
-            #Adaptive L2 reg
+            # Adaptive L2 regularization based on the 
+            # difference between training and validation losses
             if val_loss > 1.5 * (av_loss):
                 for g in optimizer.param_groups: 
                     g['weight_decay'] = g['weight_decay'] * 1.1
@@ -297,8 +309,9 @@ def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'c
             print(f'batch : {batch_i}, loss : {av_loss:6.4f}, val loss: {val_loss:6.4f},  L2 : {weight_decay:8.6f}')
             
         
-
-    reward_model.l2 = weight_decay   
+    # Storing the weight decay to be used at the next iteration of reward model training
+    reward_model.l2 = weight_decay  
+    # Adjusting mean and std of the for new version of the reward model 
     reward_model.set_mean_std(data_buffer.get_all_pairs())
 
     return reward_model, (av_loss, val_loss, weight_decay)
@@ -318,7 +331,7 @@ def train_policy(venv_fn, reward_model, policy, num_steps, device, rl_steps, log
     policy._setup_lr_schedule()
 
     # reset_num timesteps allows having single TB_log when calling .learn() multiple times
-    policy.learn(num_steps, reset_num_timesteps = False, tb_log_name=log_name, callback = callback)
+    policy.learn(num_steps, reset_num_timesteps=False, tb_log_name=log_name, callback=callback)
 
     return policy
    
