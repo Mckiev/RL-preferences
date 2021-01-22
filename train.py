@@ -173,7 +173,7 @@ class RewardNet(nn.Module):
         clip = clip.permute(0, 3, 1, 2)
 
         # normalizing observations to be in [0,1] and adding noize
-        clip = clip / 255.0 + clip.new(clip.size()).normal_(0,0.1)
+        clip = clip / 255.0 #+ clip.new(clip.size()).normal_(0,0.1)
 
         return torch.sum(self.model(clip))
 
@@ -198,7 +198,7 @@ class RewardNet(nn.Module):
     def set_mean_std(self, pairs, device = 'cuda:0'):
         '''
         computes the mean and std over provided pairs data, 
-        and sets the relevant properties 
+        and sets the mean and std properties 
         '''
         rewards = []
         for clip0, clip1 , label in pairs:
@@ -219,7 +219,7 @@ def rm_loss_func(ret0, ret1, label, device = 'cuda:0'):
     sm = nn.Softmax(dim = 0)
     preds = sm(torch.stack((ret0, ret1)))
     #getting log of predictions after adding label noize
-    log_preds = torch.log(preds * 0.95 + 0.05)
+    log_preds = torch.log(preds * 0.9 + 0.05)
 
     #compute cross entropy given the label
     target = torch.tensor([1-label, label]).to(device)
@@ -524,7 +524,7 @@ def main():
 
         t_finish = time.time()
         iter_time = t_finish - t_start
-        log_iter(run_dir, rl_steps, data_buffer, true_performance, 0 , rm_train_stats, iter_time) 
+        log_iter(run_dir, rl_steps, data_buffer, true_performance, 0, rm_train_stats, iter_time) 
         
         if LOG_TIME:
             with open(LOG_TIME, 'a') as f:

@@ -9,6 +9,11 @@ from stable_baselines3.common.vec_env import VecVideoRecorder, VecFrameStack
 import torch
 
 def timeitt(method):
+    '''
+    Wrapper that records time spent by the method
+    if the global variable LOG_TIME is specified - writes time into the LOG_TIME file
+    otherwise prints time into terminal
+    '''
     def timed(*args, **kw):
         g = method.__globals__  
         LOG_TIME = g.get('LOG_TIME', None)
@@ -33,7 +38,9 @@ def timeitt(method):
 
 @timeitt
 def save_state(run_dir, i, reward_model, policy, data_buffer):
-
+    """
+    Function that saves current state of training 
+    """
     save_dir =os.path.join(run_dir, "saved_states", str(i))
     os.makedirs(save_dir, exist_ok=True)
 
@@ -52,7 +59,11 @@ def save_state(run_dir, i, reward_model, policy, data_buffer):
 
 @timeitt
 def load_state(run_dir):
+    """
+    Function that loads the previously saved state of training 
+    """
 
+    #looking for the latest saved state
     state_dir = os.path.join(run_dir, "saved_states")
     i = max([int(f.name) for f in os.scandir(state_dir) if f.is_dir()])
     load_dir =os.path.join(state_dir, str(i))

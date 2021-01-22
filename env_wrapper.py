@@ -181,8 +181,6 @@ def make_vec_env_fix(
 
 class ContWrapper(AtariWrapper):
 
-    ##TODO mask score!
-
     """
     :param env_name: (str) name of the Atari environment that will be wrapped
     :param max_steps: (int) Max number of steps per episode
