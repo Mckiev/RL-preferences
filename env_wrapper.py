@@ -290,11 +290,11 @@ class HideScore(gym.ObservationWrapper):
         Hides the score in the unwrapped gym environment
         """
         if self.spec.id == 'BeamRiderNoFrameskip-v4':
-            frame[:12,:] = [0,0,0]
-            frame[12:17,10:17] = [0,0,0]
-            frame[12:17,66:79] = [0,0,0]
+            frame[183:190, 32:46] = [0,0,0]
+            frame[10:18, 61:107] = [0,0,0]
+            frame[32:40, 20:31] = [0,0,0]
         elif self.spec.id == 'PongNoFrameskip-v4':
-            frame[:24,:] = [0,0,0]
+            frame[:24,:] = [236,236,236]
         elif self.spec.id == 'SeaquestNoFrameskip-v4':
             frame[:20,:] = [0,0,0]
             
