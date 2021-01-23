@@ -82,7 +82,7 @@ class AnnotationBuffer(object):
         even_pref_freq = np.mean([label == 0.5 for (c1, c2, label) in self.train_data])
 
         #taking into account that label noize is used
-        return -((1 - even_pref_freq) * np.log(0.95) + even_pref_freq * np.log(0.5))
+        return -((1 - even_pref_freq) * np.log(0.9) + even_pref_freq * np.log(0.5))
 
     @property
     def val_loss_lb(self):
@@ -90,7 +90,7 @@ class AnnotationBuffer(object):
         even_pref_freq = np.mean([label == 0.5 for (c1, c2, label) in self.val_data])
 
         #taking into account that label noize is used
-        return -((1 - even_pref_freq) * np.log(0.95) + even_pref_freq * np.log(0.5))
+        return -((1 - even_pref_freq) * np.log(0.9) + even_pref_freq * np.log(0.5))
 
     def get_all_pairs(self):
         '''
