@@ -61,11 +61,18 @@ class AnnotationBuffer(object):
         self.train_data_all.extend(new_train_data)
         self.current_size += len(data)
 
+
+
+
         # Only recent samples are available for training
         # such that total training data size <= max_size   
         self.train_data = self.train_data_all[-self.train_max_size:]
         self.val_data = self.val_data_all[-self.val_max_size:]
 
+        if self.current_size > self.max_size + 1000:
+            self.val_data_all = self.val_data.copy()
+            self.train_data_all = self.train_data.copy()
+            self.current_size = self.max_size
 
        
     def sample_batch(self, n):
@@ -82,7 +89,7 @@ class AnnotationBuffer(object):
         even_pref_freq = np.mean([label == 0.5 for (c1, c2, label) in self.train_data])
 
         #taking into account that label noize is used
-        return -((1 - even_pref_freq) * np.log(0.9) + even_pref_freq * np.log(0.5))
+        return -((1 - even_pref_freq) * np.log(0.95) + even_pref_freq * np.log(0.5))
 
     @property
     def val_loss_lb(self):
@@ -90,7 +97,7 @@ class AnnotationBuffer(object):
         even_pref_freq = np.mean([label == 0.5 for (c1, c2, label) in self.val_data])
 
         #taking into account that label noize is used
-        return -((1 - even_pref_freq) * np.log(0.9) + even_pref_freq * np.log(0.5))
+        return -((1 - even_pref_freq) * np.log(0.95) + even_pref_freq * np.log(0.5))
 
     def get_all_pairs(self):
         '''
