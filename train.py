@@ -171,33 +171,39 @@ class RewardNet(nn.Module):
         self.std = 0.05
         self.l2 = l2
 
-    def forward(self, clip):
-        '''
-        predicts the (!) unnormalized sum of rewards for a given clip
-        used only for assigning preferences, so normalization is unnecesary
-        '''
-        # if self.env_type == 'procgen':
-        clip = clip.permute(0, 3, 1, 2)
+    # def forward(self, clip):
+    #     '''
+    #     predicts the (!) unnormalized sum of rewards for a given clip
+    #     used only for assigning preferences, so normalization is unnecesary
+    #     '''
+    #     # if self.env_type == 'procgen':
+    #     clip = clip.permute(0, 3, 1, 2)
 
-        # normalizing observations to be in [0,1] and adding noize
-        clip = clip / 255.0 #+ clip.new(clip.size()).normal_(0,0.1)
+    #     # normalizing observations to be in [0,1] and adding noize
+    #     clip = clip / 255.0 #+ clip.new(clip.size()).normal_(0,0.1)
 
-        return torch.sum(self.model(clip))
+    #     return torch.sum(self.model(clip))
 
-    def rew_fn(self, x):
-        self.eval()
+    def forward(self, x):
         # if self.env_type == 'procgen':
         x = x.permute(0,3,1,2)
 
         # we don't add noize during evaluation
         x = x / 255.0
 
-        rewards = torch.squeeze(self.model(x)).detach().cpu().numpy()
-
         # normalizing output to be 0 mean, 0.05 std over the annotation buffer
-        rewards = 0.05 * (rewards - self.mean) / self.std
+        rewards = self.model(x)
+        rewards = (0.05 / self.std) * (rewards - self.mean) 
 
-        return rewards
+        if self.training:
+            out = torch.sum(rewards)
+        else:
+            out = torch.squeeze(rewards).detach().cpu().numpy()
+
+        return out
+
+    def rew_fn(self, x):
+        return self.forward(x)
 
     def save(self, path):
         torch.save(self.model, path)
@@ -207,12 +213,13 @@ class RewardNet(nn.Module):
         computes the mean and std over provided pairs data, 
         and sets the mean and std properties 
         '''
+        self.eval()
         rewards = []
         for clip0, clip1 , label in pairs:
-            rewards.extend(self.rew_fn(torch.from_numpy(clip0).float().to(device)))
-            rewards.extend(self.rew_fn(torch.from_numpy(clip1).float().to(device)))
+            rewards.extend(self.forward(torch.from_numpy(clip0).float().to(device)))
+            rewards.extend(self.forward(torch.from_numpy(clip1).float().to(device)))
 
-        unnorm_rewards = self.std * np.array(rewards) / 0.05  + self.mean
+        unnorm_rewards = (self.std / 0.05) * np.array(rewards)  + self.mean
         self.mean, self.std = np.mean(unnorm_rewards), np.std(unnorm_rewards)
 
 
@@ -279,12 +286,12 @@ def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'c
     optimizer = optim.Adam(reward_model.parameters(), lr= 0.0003, weight_decay = weight_decay)
     
     print(f'Validation Loss lower bound : {data_buffer.val_loss_lb:6.4f},')
-
+    reward_model.train()
     for batch_i in range(1, num_batches + 1):
         annotations = data_buffer.sample_batch(batch_size)
         loss = 0
         optimizer.zero_grad()
-        reward_model.train()
+        
         for clip0, clip1 , label in annotations:
             
             ret0 = reward_model(torch.from_numpy(clip0).float().to(device))
@@ -331,7 +338,7 @@ def train_policy(policy, num_steps, rl_steps, log_name, callback):
     '''
     
     # Implementation of the learning rate decay
-    policy.learning_rate = 0.0007*(1 - rl_steps/8e7)
+    policy.learning_rate = 0.0007*(1 - rl_steps/16e7)
     policy._setup_lr_schedule()
 
     # reset_num timesteps allows having single TB_log when calling .learn() multiple times
@@ -449,7 +456,7 @@ def main():
 
     #creating the environment with reward replaced by the prediction from reward_model
     reward_model.to(device)
-    proxy_reward_function = lambda x: reward_model.rew_fn(torch.from_numpy(x).float().to(device))
+    proxy_reward_function = lambda x: reward_model(torch.from_numpy(x).float().to(device))
     proxy_reward_venv = Vec_reward_wrapper(venv_fn(), proxy_reward_function)
 
     # resetting the environment to avoid raising error from reset_num_timesteps
@@ -474,6 +481,7 @@ def main():
         
         reward_model, rm_train_stats = train_reward(reward_model, data_buffer, args.init_train_size, args.pairs_in_batch)
         # this callback adds values to TensorBoard logs for easier plotting
+        reward_model.evel()
         callback = TensorboardCallback((data_buffer.current_size, data_buffer.loss_lb, iter_time, rm_train_stats))
         policy = train_policy(policy, args.steps_per_iter, 0,  args.log_name, callback)
 
