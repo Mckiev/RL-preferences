@@ -338,7 +338,7 @@ def train_policy(policy, num_steps, rl_steps, log_name, callback):
     '''
     
     # Implementation of the learning rate decay
-    policy.learning_rate = 0.0007*(1 - rl_steps/16e7)
+    policy.learning_rate = 0.0007*(1 - rl_steps/8e7)
     policy._setup_lr_schedule()
 
     # reset_num timesteps allows having single TB_log when calling .learn() multiple times
@@ -481,7 +481,7 @@ def main():
         
         reward_model, rm_train_stats = train_reward(reward_model, data_buffer, args.init_train_size, args.pairs_in_batch)
         # this callback adds values to TensorBoard logs for easier plotting
-        reward_model.evel()
+        reward_model.eval()
         callback = TensorboardCallback((data_buffer.current_size, data_buffer.loss_lb, iter_time, rm_train_stats))
         policy = train_policy(policy, args.steps_per_iter, 0,  args.log_name, callback)
 
