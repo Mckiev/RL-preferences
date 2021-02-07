@@ -33,6 +33,7 @@ class AnnotationBuffer(object):
     def __init__(self, max_size=3000):
         self.max_size = max_size
         self.current_size = 0
+        self.total_labels = 0
 
         #calculate max train and validation set sizes based on total max_size
         self.train_max_size = int(self.max_size * (1 - 1/np.exp(1)))
@@ -60,7 +61,7 @@ class AnnotationBuffer(object):
         self.val_data_all.extend(new_val_data)
         self.train_data_all.extend(new_train_data)
         self.current_size += len(data)
-
+        self.total_labels += len(data)
 
 
 
@@ -418,7 +419,7 @@ def main():
     parser.add_argument('--pairs_per_iter', type=int, default=5*10**3, help='number of labels the reward model is trained on each iteration')
     parser.add_argument('--pairs_in_batch', type=int, default=16, help='batch size for reward model training')
     parser.add_argument('--l2', type=float, default=0.0001, help='initial l2 regularization for a reward model')
-    parser.add_argument('--dropout', type=float, default=0.2)
+    parser.add_argument('--dropout', type=float, default=0.5)
 
     args = parser.parse_args()
 
@@ -449,7 +450,8 @@ def main():
 
     # In case this is a fresh experiment - initialize fresh objects
     if not args.resume_training:
-        policy = A2C('CnnPolicy', venv_fn(), verbose=1, tensorboard_log="TB_LOGS", ent_coef=0.01, learning_rate = 0.0007)
+        policy = A2C('CnnPolicy', venv_fn(), verbose=1, tensorboard_log="TB_LOGS", ent_coef=0.01, learning_rate = 0.0007,
+         policy_kwargs={"optimizer_class" : th.optim.Adam, "optimizer_kwargs" : {"eps" : 1e-5, "betas" : [.99,.999]}})
         reward_model = RewardNet(l2= args.l2, dropout = args.dropout, env_type = args.env_type)
         data_buffer = AnnotationBuffer()
         store_args(args, run_dir)  
@@ -482,7 +484,7 @@ def main():
         reward_model, rm_train_stats = train_reward(reward_model, data_buffer, args.init_train_size, args.pairs_in_batch)
         # this callback adds values to TensorBoard logs for easier plotting
         reward_model.eval()
-        callback = TensorboardCallback((data_buffer.current_size, data_buffer.loss_lb, iter_time, rm_train_stats))
+        callback = TensorboardCallback((data_buffer.total_labels, data_buffer.loss_lb, iter_time, rm_train_stats))
         policy = train_policy(policy, args.steps_per_iter, 0,  args.log_name, callback)
 
         save_state(run_dir, 0, reward_model, policy, data_buffer)
@@ -520,7 +522,7 @@ def main():
         reward_model, rm_train_stats = train_reward(reward_model, data_buffer, args.pairs_per_iter, args.pairs_in_batch)
 
         #TODO : pretify passing data to callback
-        callback = TensorboardCallback((data_buffer.current_size, data_buffer.loss_lb, iter_time, rm_train_stats))
+        callback = TensorboardCallback((data_buffer.total_labels, data_buffer.loss_lb, iter_time, rm_train_stats))
         policy = train_policy(policy, args.steps_per_iter, rl_steps, args.log_name, callback)
 
         # storing the state every 1M steps
