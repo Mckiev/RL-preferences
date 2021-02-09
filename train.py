@@ -451,7 +451,7 @@ def main():
     # In case this is a fresh experiment - initialize fresh objects
     if not args.resume_training:
         policy = A2C('CnnPolicy', venv_fn(), verbose=1, tensorboard_log="TB_LOGS", ent_coef=0.01, learning_rate = 0.0007,
-         policy_kwargs={"optimizer_class" : th.optim.Adam, "optimizer_kwargs" : {"eps" : 1e-5, "betas" : [.99,.999]}})
+         policy_kwargs={"optimizer_class" : torch.optim.Adam, "optimizer_kwargs" : {"eps" : 1e-5, "betas" : [.99,.999]}})
         reward_model = RewardNet(l2= args.l2, dropout = args.dropout, env_type = args.env_type)
         data_buffer = AnnotationBuffer()
         store_args(args, run_dir)  
