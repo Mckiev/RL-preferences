@@ -142,25 +142,25 @@ class RewardNet(nn.Module):
         elif env_type == 'atari':
             self.model = nn.Sequential(
                 #conv1
-                nn.Dropout2d(p=dropout),
                 nn.Conv2d(4, 16, 7, stride=3),
-                nn.LeakyReLU(),
                 nn.BatchNorm2d(16, momentum = 0.01),
+                nn.LeakyReLU(),
+                nn.Dropout2d(p=dropout),
                 #conv2
-                nn.Dropout2d(p=dropout),
                 nn.Conv2d(16, 16, 5, stride=2),
-                nn.LeakyReLU(),
                 nn.BatchNorm2d(16, momentum = 0.01),
+                nn.LeakyReLU(),
+                nn.Dropout2d(p=dropout),
                 #conv3
-                nn.Dropout2d(p=dropout),
                 nn.Conv2d(16, 16, 3, stride=1),
-                nn.LeakyReLU(),
                 nn.BatchNorm2d(16, momentum = 0.01),
+                nn.LeakyReLU(),
+                nn.Dropout2d(p=dropout),
                 #conv4
-                nn.Dropout2d(p=dropout),
                 nn.Conv2d(16, 16, 3, stride=1),
-                nn.LeakyReLU(),
                 nn.BatchNorm2d(16, momentum = 0.01),
+                nn.LeakyReLU(),
+                nn.Dropout2d(p=dropout),
                 # 2 layer mlp
                 nn.Flatten(),
                 nn.Linear(7*7*16, 64),
@@ -461,7 +461,7 @@ def main():
 
     # initializing RM optimizer
     rm_optimizer = optim.Adam(reward_model.parameters(), lr= 0.0003, weight_decay = reward_model.l2)
-
+    
     #creating the environment with reward replaced by the prediction from reward_model
     reward_model.to(device)
     proxy_reward_function = lambda x: reward_model(torch.from_numpy(x).float().to(device))
