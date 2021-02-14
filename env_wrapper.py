@@ -1,11 +1,11 @@
 import numpy as np
 import os
 import gym
-from stable_baselines3.common.vec_env import VecEnvWrapper
 from stable_baselines3.common.atari_wrappers import AtariWrapper
 from typing import Any, Callable, Dict, Optional, Type, Union
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv, VecFrameStack
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv, VecFrameStack, VecEnvWrapper
+
 
 
 def make_atari_default(
@@ -219,31 +219,6 @@ class ContWrapper(AtariWrapper):
 
         return obs, np.float(reward), np.bool(done), info
 
-class Vec_reward_wrapper(VecEnvWrapper):
-    """
-    This wrapper changes the reward of the provided environment to some function
-    of its observations
-
-    r_model must be a callable function that takes batch of obervations
-    and returns batch of rewards
-
-    """
-
-    def __init__(self, venv, r_model):
-        VecEnvWrapper.__init__(self, venv)
-        assert callable(r_model)
-        self.r_model = r_model
-
-    def reset(self):
-        obs = self.venv.reset()
-        return obs
-
-    def step_wait(self):
-        obs, rews, dones, infos = self.venv.step_wait()
-        proxy_rew = self.r_model(obs)
-        return obs, proxy_rew, dones, infos
-
-
 class Reward_wrapper(gym.Wrapper):
 
     def __init__(self, env, r_model):
@@ -256,7 +231,7 @@ class Reward_wrapper(gym.Wrapper):
         observation, reward, done, info = self.env.step(action)
         return observation, self.r_model(observation), done, info
 
-from stable_baselines3.common.vec_env import VecEnvWrapper
+
 class Vec_reward_wrapper(VecEnvWrapper):
     """
     This wrapper changes the reward of the provided environment to some function
