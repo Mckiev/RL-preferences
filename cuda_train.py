@@ -263,7 +263,7 @@ def calc_val_loss(reward_model, data_buffer, device):
 
 
 @timeitt
-def train_reward(reward_model, optimizer, data_buffer, num_samples, batch_size, device = 'cuda:0'):
+def train_reward(reward_model, optimizer, adaptive, data_buffer, num_samples, batch_size, device = 'cuda:0'):
 
     '''
     Traines a given reward_model for num_batches from data_buffer
@@ -277,17 +277,17 @@ def train_reward(reward_model, optimizer, data_buffer, num_samples, batch_size, 
         
     '''
     num_batches = int(num_samples / batch_size)
-
     reward_model.to(device)
+    reward_model.train()
     # current weight decay is stored as the reward_model property
     # and is being adjusted throughout the training
     weight_decay = reward_model.l2
-    av_loss = val_loss = 0
+    av_loss = 0
+    val_loss = calc_val_loss(reward_model, data_buffer, device)
     losses = []
 
     
-    print(f'Validation Loss lower bound : {data_buffer.val_loss_lb:6.4f},')
-    reward_model.train()
+    print(f'Vall loss: {val_loss:6.4f}, Vall loss LB : {data_buffer.val_loss_lb:6.4f},')
     for batch_i in range(1, num_batches + 1):
         annotations = data_buffer.sample_batch(batch_size)
         loss = 0
@@ -306,18 +306,23 @@ def train_reward(reward_model, optimizer, data_buffer, num_samples, batch_size, 
         optimizer.step()
 
         if batch_i % 100 == 0:
-            val_loss = calc_val_loss(reward_model, data_buffer, device) 
+            
             av_loss = np.mean(losses[-100:])
             # Adaptive L2 regularization based on the 
             # difference between training and validation losses
-            if val_loss > 1.5 * (av_loss):
-                for g in optimizer.param_groups: 
-                    g['weight_decay'] = g['weight_decay'] * 1.1
-                    weight_decay = g['weight_decay']
-            elif val_loss < av_loss * 1.1:
-                 for g in optimizer.param_groups:
-                    g['weight_decay'] = g['weight_decay'] / 1.1   
-                    weight_decay = g['weight_decay']
+            if adaptive:
+                
+                if val_loss > 1.5 * (av_loss):
+                    for g in optimizer.param_groups: 
+                        g['weight_decay'] = g['weight_decay'] * 1.1
+                        weight_decay = g['weight_decay']
+                elif val_loss < av_loss * 1.1:
+                     for g in optimizer.param_groups:
+                        g['weight_decay'] = g['weight_decay'] / 1.1   
+                        weight_decay = g['weight_decay']
+                val_loss = calc_val_loss(reward_model, data_buffer, device) 
+            else:
+                pass
 
             print(f'batch : {batch_i}, loss : {av_loss:6.4f}, val loss: {val_loss:6.4f},  L2 : {weight_decay:8.6f}')
             
@@ -326,7 +331,6 @@ def train_reward(reward_model, optimizer, data_buffer, num_samples, batch_size, 
     reward_model.l2 = weight_decay  
     # Adjusting mean and std of the for new version of the reward model 
     reward_model.set_mean_std(data_buffer.get_all_pairs())
-
     return reward_model, optimizer, (av_loss, val_loss, weight_decay)
 
 
@@ -422,6 +426,9 @@ def main():
     parser.add_argument('--pairs_per_iter', type=int, default=5*10**3, help='number of labels the reward model is trained on each iteration')
     parser.add_argument('--pairs_in_batch', type=int, default=16, help='batch size for reward model training')
     parser.add_argument('--l2', type=float, default=0.0001, help='initial l2 regularization for a reward model')
+    parser.add_argument('--adaptive', dest='adaptive', action='store_true')
+    parser.add_argument('--no-adaptive', dest='adaptive', action='store_false')
+    parser.set_defaults(adaptive=True)
     parser.add_argument('--dropout', type=float, default=0.5)
 
     args = parser.parse_args()
@@ -487,7 +494,7 @@ def main():
 
         print(f'Buffer size = {data_buffer.current_size}')
         
-        reward_model, rm_optimizer, rm_train_stats = train_reward(reward_model, rm_optimizer, data_buffer, args.init_train_size, args.pairs_in_batch)
+        reward_model, rm_optimizer, rm_train_stats = train_reward(reward_model, rm_optimizer, args.adaptive, data_buffer, args.init_train_size, args.pairs_in_batch)
         # this callback adds values to TensorBoard logs for easier plotting
         reward_model.eval()
         callback = TensorboardCallback((data_buffer.total_labels, data_buffer.loss_lb, iter_time, rm_train_stats))
@@ -525,7 +532,7 @@ def main():
 
         print(f'Buffer size = {data_buffer.current_size}')
         
-        reward_model, rm_optimizer, rm_train_stats = train_reward(reward_model, rm_optimizer, data_buffer, args.pairs_per_iter, args.pairs_in_batch)
+        reward_model, rm_optimizer, rm_train_stats = train_reward(reward_model, rm_optimizer, args.adaptive, data_buffer, args.pairs_per_iter, args.pairs_in_batch)
 
         #TODO : pretify passing data to callback
         callback = TensorboardCallback((data_buffer.total_labels, data_buffer.loss_lb, iter_time, rm_train_stats))
