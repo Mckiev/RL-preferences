@@ -70,7 +70,7 @@ class AnnotationBuffer(object):
         self.train_data = self.train_data_all[-self.train_max_size:]
         self.val_data = self.val_data_all[-self.val_max_size:]
 
-        if self.current_size > self.max_size + 1000:
+        if self.current_size > self.max_size + 100:
             self.val_data_all = self.val_data.copy()
             self.train_data_all = self.train_data.copy()
             self.current_size = self.max_size
@@ -142,25 +142,25 @@ class RewardNet(nn.Module):
         elif env_type == 'atari':
             self.model = nn.Sequential(
                 #conv1
-                nn.Dropout2d(p=dropout),
                 nn.Conv2d(4, 16, 7, stride=3),
-                nn.LeakyReLU(),
                 nn.BatchNorm2d(16, momentum = 0.01),
+                nn.LeakyReLU(),
+                nn.Dropout2d(p=dropout),
                 #conv2
-                nn.Dropout2d(p=dropout),
                 nn.Conv2d(16, 16, 5, stride=2),
-                nn.LeakyReLU(),
                 nn.BatchNorm2d(16, momentum = 0.01),
+                nn.LeakyReLU(),
+                nn.Dropout2d(p=dropout),
                 #conv3
-                nn.Dropout2d(p=dropout),
                 nn.Conv2d(16, 16, 3, stride=1),
-                nn.LeakyReLU(),
                 nn.BatchNorm2d(16, momentum = 0.01),
+                nn.LeakyReLU(),
+                nn.Dropout2d(p=dropout),
                 #conv4
-                nn.Dropout2d(p=dropout),
                 nn.Conv2d(16, 16, 3, stride=1),
-                nn.LeakyReLU(),
                 nn.BatchNorm2d(16, momentum = 0.01),
+                nn.LeakyReLU(),
+                #nn.Dropout2d(p=dropout),
                 # 2 layer mlp
                 nn.Flatten(),
                 nn.Linear(7*7*16, 64),
@@ -187,7 +187,10 @@ class RewardNet(nn.Module):
 
     def forward(self, x):
         # if self.env_type == 'procgen':
-        x = x.permute(0,3,1,2)
+        if not torch.is_tensor(x):
+            x = torch.from_numpy(x).float().to(torch.device('cuda:0'))
+            
+        x = x.permute(0,3,1,2).float()
 
         # we don't add noize during evaluation
         x = x / 255.0
@@ -217,10 +220,10 @@ class RewardNet(nn.Module):
         self.eval()
         rewards = []
         for clip0, clip1 , label in pairs:
-            rewards.extend(self.forward(torch.from_numpy(clip0).float().to(device)))
-            rewards.extend(self.forward(torch.from_numpy(clip1).float().to(device)))
+            rewards.extend(self.forward(clip0))
+            rewards.extend(self.forward(clip1))
 
-        unnorm_rewards = (self.std / 0.05) * np.array(rewards)  + self.mean
+        unnorm_rewards = (self.std / 0.05) * np.array(rewards) + self.mean
         self.mean, self.std = np.mean(unnorm_rewards), np.std(unnorm_rewards)
 
 
@@ -252,8 +255,8 @@ def calc_val_loss(reward_model, data_buffer, device):
     num_pairs = 0
     for clip0, clip1 , label in data_buffer.val_iter():
 
-        ret0 = reward_model(torch.from_numpy(clip0).float().to(device))
-        ret1 = reward_model(torch.from_numpy(clip1).float().to(device))
+        ret0 = reward_model(clip0)
+        ret1 = reward_model(clip1)
         loss += rm_loss_func(ret0, ret1, label, device).item()
         num_pairs += 1
 
@@ -263,7 +266,8 @@ def calc_val_loss(reward_model, data_buffer, device):
 
 
 @timeitt
-def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'cuda:0'):
+def train_reward(reward_model, optimizer, adaptive, data_buffer, num_samples, batch_size, device = 'cuda:0'):
+
     '''
     Traines a given reward_model for num_batches from data_buffer
     Returns the new reward_model
@@ -276,18 +280,17 @@ def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'c
         
     '''
     num_batches = int(num_samples / batch_size)
-
     reward_model.to(device)
+    reward_model.train()
     # current weight decay is stored as the reward_model property
     # and is being adjusted throughout the training
     weight_decay = reward_model.l2
-    av_loss = val_loss = 0
+    av_loss = 0
+    val_loss = calc_val_loss(reward_model, data_buffer, device)
     losses = []
 
-    optimizer = optim.Adam(reward_model.parameters(), lr= 0.0003, weight_decay = weight_decay)
     
-    print(f'Validation Loss lower bound : {data_buffer.val_loss_lb:6.4f},')
-    reward_model.train()
+    print(f'Vall loss: {val_loss:6.4f}, Vall loss LB : {data_buffer.val_loss_lb:6.4f},')
     for batch_i in range(1, num_batches + 1):
         annotations = data_buffer.sample_batch(batch_size)
         loss = 0
@@ -295,8 +298,8 @@ def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'c
         
         for clip0, clip1 , label in annotations:
             
-            ret0 = reward_model(torch.from_numpy(clip0).float().to(device))
-            ret1 = reward_model(torch.from_numpy(clip1).float().to(device))
+            ret0 = reward_model(clip0)
+            ret1 = reward_model(clip1)
             loss += rm_loss_func(ret0, ret1, label, device)
         
         loss = loss / batch_size
@@ -306,18 +309,23 @@ def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'c
         optimizer.step()
 
         if batch_i % 100 == 0:
-            val_loss = calc_val_loss(reward_model, data_buffer, device) 
+            
             av_loss = np.mean(losses[-100:])
             # Adaptive L2 regularization based on the 
             # difference between training and validation losses
-            if val_loss > 1.5 * (av_loss):
-                for g in optimizer.param_groups: 
-                    g['weight_decay'] = g['weight_decay'] * 1.1
-                    weight_decay = g['weight_decay']
-            elif val_loss < av_loss * 1.1:
-                 for g in optimizer.param_groups:
-                    g['weight_decay'] = g['weight_decay'] / 1.1   
-                    weight_decay = g['weight_decay']
+            if adaptive:
+                
+                if val_loss > 1.5 * (av_loss):
+                    for g in optimizer.param_groups: 
+                        g['weight_decay'] = g['weight_decay'] * 1.1
+                        weight_decay = g['weight_decay']
+                elif val_loss < av_loss * 1.1:
+                     for g in optimizer.param_groups:
+                        g['weight_decay'] = g['weight_decay'] / 1.1   
+                        weight_decay = g['weight_decay']
+                val_loss = calc_val_loss(reward_model, data_buffer, device) 
+            else:
+                pass
 
             print(f'batch : {batch_i}, loss : {av_loss:6.4f}, val loss: {val_loss:6.4f},  L2 : {weight_decay:8.6f}')
             
@@ -326,15 +334,15 @@ def train_reward(reward_model, data_buffer, num_samples, batch_size, device = 'c
     reward_model.l2 = weight_decay  
     # Adjusting mean and std of the for new version of the reward model 
     reward_model.set_mean_std(data_buffer.get_all_pairs())
+    return reward_model, optimizer, (av_loss, val_loss, weight_decay)
 
-    return reward_model, (av_loss, val_loss, weight_decay)
 
     
 
 @timeitt
 def train_policy(policy, num_steps, rl_steps, log_name, callback):
     '''
-    Traines policy for num_steps
+    Trains policy for num_steps
     Returns retrained policy
     '''
     
@@ -349,7 +357,7 @@ def train_policy(policy, num_steps, rl_steps, log_name, callback):
    
 
 @timeitt
-def collect_annotations(venv, policy, num_pairs, clip_size):
+def collect_annotations(venv, policy, num_pairs, clip_size, to_cuda = True):
     '''
     Collects episodes using the provided policy, slices them to snippets of given length,
     selects pairs randomly and adds a label based on which snipped had larger reward
@@ -392,7 +400,16 @@ def collect_annotations(venv, policy, num_pairs, clip_size):
         elif clip0['sum_rews'] == clip1['sum_rews']:
             label = 0.5
 
-        data.append([np.array(clip0['observations']), np.array(clip1['observations']), label])
+        if to_cuda:
+            clip0 = torch.tensor(clip0['observations'], device = torch.device('cuda:0'), dtype = torch.uint8)
+            clip1 = torch.tensor(clip1['observations'], device = torch.device('cuda:0'), dtype = torch.uint8)
+            label = torch.tensor(label)
+        else:
+            clip0 = np.array(clip0['observations'], dtype = np.uint8)
+            clip1 = np.array(clip1['observations'], dtype = np.uint8)
+            label = np.array(label)
+
+        data.append((clip0, clip1, label))
 
     return data
 
@@ -407,6 +424,8 @@ def main():
     parser.add_argument('--start_level', type=int, default=0)
     parser.add_argument('--log_dir', type=str, default='LOGS')
     parser.add_argument('--log_name', type=str, default='')
+    parser.add_argument('--cpu_buffer', dest = 'on_cuda', action='store_false', help = 'whether to store buffet on cpu or GPU \
+                                                                                        by default requires up to 8GB memory on GPU')
 
     parser.add_argument('--resume_training', action='store_true')
 
@@ -419,6 +438,9 @@ def main():
     parser.add_argument('--pairs_per_iter', type=int, default=5*10**3, help='number of labels the reward model is trained on each iteration')
     parser.add_argument('--pairs_in_batch', type=int, default=16, help='batch size for reward model training')
     parser.add_argument('--l2', type=float, default=0.0001, help='initial l2 regularization for a reward model')
+    parser.add_argument('--adaptive', dest='adaptive', action='store_true')
+    parser.add_argument('--no-adaptive', dest='adaptive', action='store_false')
+    parser.set_defaults(adaptive=True)
     parser.add_argument('--dropout', type=float, default=0.5)
 
     args = parser.parse_args()
@@ -428,8 +450,6 @@ def main():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f'\n Using {device} for training')
 
-
-    
     run_dir, monitor_dir, video_dir = setup_logging(args)
     global LOG_TIME
     LOG_TIME = os.path.join(run_dir, "TIME_LOG.txt")
@@ -451,11 +471,14 @@ def main():
     # In case this is a fresh experiment - initialize fresh objects
     if not args.resume_training:
         policy = A2C('CnnPolicy', venv_fn(), verbose=1, tensorboard_log="TB_LOGS", ent_coef=0.01, learning_rate = 0.0007,
-         policy_kwargs={"optimizer_class" : torch.optim.Adam, "optimizer_kwargs" : {"eps" : 1e-5, "betas" : [.99,.999]}})
-        reward_model = RewardNet(l2= args.l2, dropout = args.dropout, env_type = args.env_type)
+            policy_kwargs={"optimizer_class" : torch.optim.Adam, "optimizer_kwargs" : {"eps" : 1e-5, "betas" : [.99,.999]}})
+        reward_model = RewardNet(l2= args.l2, dropout = args.dropout, env_type = args.env_type)        
         data_buffer = AnnotationBuffer()
-        store_args(args, run_dir)  
+        store_args(args, run_dir)
 
+    # initializing RM optimizer
+    rm_optimizer = optim.Adam(reward_model.parameters(), lr= 0.0003, weight_decay = reward_model.l2)
+    
     #creating the environment with reward replaced by the prediction from reward_model
     reward_model.to(device)
     proxy_reward_function = lambda x: reward_model(torch.from_numpy(x).float().to(device))
@@ -476,12 +499,12 @@ def main():
         t_start = time.time()
         print(f'================== Initial iter ====================')
 
-        annotations = collect_annotations(annotation_env, policy, args.init_buffer_size, args.clip_size)
+        annotations = collect_annotations(annotation_env, policy, args.init_buffer_size, args.clip_size, args.on_cuda)
         data_buffer.add(annotations)   
 
         print(f'Buffer size = {data_buffer.current_size}')
         
-        reward_model, rm_train_stats = train_reward(reward_model, data_buffer, args.init_train_size, args.pairs_in_batch)
+        reward_model, rm_optimizer, rm_train_stats = train_reward(reward_model, rm_optimizer, args.adaptive, data_buffer, args.init_train_size, args.pairs_in_batch)
         # this callback adds values to TensorBoard logs for easier plotting
         reward_model.eval()
         callback = TensorboardCallback((data_buffer.total_labels, data_buffer.loss_lb, iter_time, rm_train_stats))
@@ -503,7 +526,7 @@ def main():
 
     num_iters = int(args.total_timesteps / args.steps_per_iter)
     # calculating the initial number of pairs to collect 
-    num_pairs = init_num_pairs = round((args.n_labels - args.init_buffer_size) / 0.292 / num_iters) 
+    num_pairs = init_num_pairs = round((args.n_labels - args.init_buffer_size) / 0.239 / num_iters) 
 
     print('init_num_pairs = {}'.format(init_num_pairs))
     for i in range(i_num, num_iters):
@@ -514,12 +537,12 @@ def main():
         # decaying the number of pairs to collect
         num_pairs = round(init_num_pairs / (rl_steps/(args.total_timesteps/10) + 1))
 
-        annotations = collect_annotations(annotation_env, policy, num_pairs, args.clip_size)
+        annotations = collect_annotations(annotation_env, policy, num_pairs, args.clip_size, args.on_cuda)
         data_buffer.add(annotations)   
 
         print(f'Buffer size = {data_buffer.current_size}')
         
-        reward_model, rm_train_stats = train_reward(reward_model, data_buffer, args.pairs_per_iter, args.pairs_in_batch)
+        reward_model, rm_optimizer, rm_train_stats = train_reward(reward_model, rm_optimizer, args.adaptive, data_buffer, args.pairs_per_iter, args.pairs_in_batch)
 
         #TODO : pretify passing data to callback
         callback = TensorboardCallback((data_buffer.total_labels, data_buffer.loss_lb, iter_time, rm_train_stats))
