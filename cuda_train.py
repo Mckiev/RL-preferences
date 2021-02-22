@@ -220,7 +220,7 @@ class RewardNet(nn.Module):
             rewards.extend(self.forward(clip0))
             rewards.extend(self.forward(clip1))
 
-        unnorm_rewards = (self.std / 0.05) * np.array(rewards)  + self.mean
+        unnorm_rewards = (self.std / 0.05) * np.array(rewards) + self.mean
         self.mean, self.std = np.mean(unnorm_rewards), np.std(unnorm_rewards)
 
 
@@ -339,7 +339,7 @@ def train_reward(reward_model, optimizer, adaptive, data_buffer, num_samples, ba
 @timeitt
 def train_policy(policy, num_steps, rl_steps, log_name, callback):
     '''
-    Traines policy for num_steps
+    Trains policy for num_steps
     Returns retrained policy
     '''
     
@@ -516,7 +516,7 @@ def main():
 
     num_iters = int(args.total_timesteps / args.steps_per_iter)
     # calculating the initial number of pairs to collect 
-    num_pairs = init_num_pairs = round((args.n_labels - args.init_buffer_size) / 0.292 / num_iters) 
+    num_pairs = init_num_pairs = round((args.n_labels - args.init_buffer_size) / 0.239 / num_iters) 
 
     print('init_num_pairs = {}'.format(init_num_pairs))
     for i in range(i_num, num_iters):

@@ -7,7 +7,7 @@ parser = argparse.ArgumentParser(description='Experiments parameters')
 
 parser.add_argument('--env_name', type=str, nargs='+', default=['BeamRider'])
 parser.add_argument('--num_seeds', type=int, default=3, help="number of random seed for  each experiment")
-parser.add_argument('--pass_args', default=None, type=str,
+parser.add_argument('--pass_args', default="", type=str,
                     help="The specified string in quotes would be passed to the train_reward.py script")
 
 args = parser.parse_args()
