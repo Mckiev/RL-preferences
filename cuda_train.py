@@ -187,6 +187,9 @@ class RewardNet(nn.Module):
 
     def forward(self, x):
         # if self.env_type == 'procgen':
+        if not torch.is_tensor(x):
+            x = torch.from_numpy(x).float().to(torch.device('cuda:0'))
+            
         x = x.permute(0,3,1,2).float()
 
         # we don't add noize during evaluation
@@ -354,7 +357,7 @@ def train_policy(policy, num_steps, rl_steps, log_name, callback):
    
 
 @timeitt
-def collect_annotations(venv, policy, num_pairs, clip_size):
+def collect_annotations(venv, policy, num_pairs, clip_size, to_cuda = True):
     '''
     Collects episodes using the provided policy, slices them to snippets of given length,
     selects pairs randomly and adds a label based on which snipped had larger reward
@@ -397,9 +400,16 @@ def collect_annotations(venv, policy, num_pairs, clip_size):
         elif clip0['sum_rews'] == clip1['sum_rews']:
             label = 0.5
 
-        clip0 = torch.tensor(clip0['observations'], device = torch.device('cuda:0'), dtype = torch.uint8)
-        clip1 = torch.tensor(clip1['observations'], device = torch.device('cuda:0'), dtype = torch.uint8)
-        data.append((clip0, clip1, torch.tensor(label)))
+        if to_cuda:
+            clip0 = torch.tensor(clip0['observations'], device = torch.device('cuda:0'), dtype = torch.uint8)
+            clip1 = torch.tensor(clip1['observations'], device = torch.device('cuda:0'), dtype = torch.uint8)
+            label = torch.tensor(label)
+        else:
+            clip0 = np.array(clip0['observations'], dtype = np.uint8)
+            clip1 = np.array(clip1['observations'], dtype = np.uint8)
+            label = np.array(label)
+
+        data.append((clip0, clip1, label))
 
     return data
 
@@ -414,6 +424,8 @@ def main():
     parser.add_argument('--start_level', type=int, default=0)
     parser.add_argument('--log_dir', type=str, default='LOGS')
     parser.add_argument('--log_name', type=str, default='')
+    parser.add_argument('--cpu_buffer', dest = 'on_cuda', action='store_false', help = 'whether to store buffet on cpu or GPU \
+                                                                                        by default requires 8GB memory on GPU')
 
     parser.add_argument('--resume_training', action='store_true')
 
@@ -438,8 +450,6 @@ def main():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f'\n Using {device} for training')
 
-
-    
     run_dir, monitor_dir, video_dir = setup_logging(args)
     global LOG_TIME
     LOG_TIME = os.path.join(run_dir, "TIME_LOG.txt")
@@ -489,7 +499,7 @@ def main():
         t_start = time.time()
         print(f'================== Initial iter ====================')
 
-        annotations = collect_annotations(annotation_env, policy, args.init_buffer_size, args.clip_size)
+        annotations = collect_annotations(annotation_env, policy, args.init_buffer_size, args.clip_size, args.on_cuda)
         data_buffer.add(annotations)   
 
         print(f'Buffer size = {data_buffer.current_size}')
@@ -527,7 +537,7 @@ def main():
         # decaying the number of pairs to collect
         num_pairs = round(init_num_pairs / (rl_steps/(args.total_timesteps/10) + 1))
 
-        annotations = collect_annotations(annotation_env, policy, num_pairs, args.clip_size)
+        annotations = collect_annotations(annotation_env, policy, num_pairs, args.clip_size, args.on_cuda)
         data_buffer.add(annotations)   
 
         print(f'Buffer size = {data_buffer.current_size}')
