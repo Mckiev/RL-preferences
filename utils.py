@@ -8,6 +8,7 @@ import gym
 from stable_baselines3.common.vec_env import VecVideoRecorder, VecFrameStack
 import torch
 import subprocess
+from colored import fg
 
 def timeitt(method):
     '''
@@ -57,7 +58,6 @@ def save_state(run_dir, i, reward_model, policy, data_buffer):
 
     with open(data_buff_save_path, 'wb') as f:
         pickle.dump(data_buffer, f)  
-        
 
     policy.save(policy_save_path)
 
@@ -121,13 +121,28 @@ def store_args(args, run_dir):
 def load_args(args):
     run_dir = os.path.join(args.log_dir, args.log_name)
     args_path = os.path.join(run_dir, "config.json")
+    commit_path = os.path.join(run_dir, 'commit_hash.txt')
+
+    with open(commit_path, 'r') as f:
+        commit_hash = f.read()
+
+    assert commit_hash == get_git_revision_short_hash(),  f"{fg(1)} Current commit hash is different from experiment's hash" 
+
+
+
     with open(args_path) as f:
         args = argparse.Namespace()
         args.__dict__.update(json.load(f))
 
     args.resume_training = True
+
+
     
     return args
+
+def commit_check():
+    if subprocess.check_output(['git', 'diff', '--name-only']):
+        raise Exception(f'{fg(1)} Uncommited changes deteced! Commit first')
 
 
 def log_iter(run_dir, rl_steps, data_buffer, true_return, proxy_return, rm_train_stats, iter_time):
