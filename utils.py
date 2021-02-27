@@ -128,8 +128,6 @@ def load_args(args):
 
     assert commit_hash == get_git_revision_short_hash(),  f"{fg(1)} Current commit hash is different from experiment's hash" 
  
- 
-
     with open(args_path) as f:
         args = argparse.Namespace()
         args.__dict__.update(json.load(f))

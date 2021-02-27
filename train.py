@@ -414,8 +414,8 @@ def collect_annotations(venv, policy, num_pairs, clip_size, to_cuda = True):
     return data
 
 def main():
-    #check for uncommited changes
-    commit_check()
+    # #check for uncommited changes
+    # commit_check()
 
     ##setup args
     parser = argparse.ArgumentParser(description='Reward learning from preferences')
@@ -463,8 +463,9 @@ def main():
     
     # If resuming some earlier training run - load stored objects
     if args.resume_training:
+        args = load_args(args) 
         reward_model, policy, data_buffer, i_num = load_state(run_dir)
-        args = load_args(args)    
+           
     
     atari_name = args.env_name + "NoFrameskip-v4"
     venv_fn = lambda: make_atari_continuous(atari_name, n_envs=16)
@@ -474,12 +475,12 @@ def main():
 
     # In case this is a fresh experiment - initialize fresh objects
     if not args.resume_training:
+        store_args(args, run_dir)
         policy = A2C('CnnPolicy', venv_fn(), verbose=1, tensorboard_log="TB_LOGS", ent_coef=0.01, learning_rate = 0.0007,
             policy_kwargs={"optimizer_class" : torch.optim.Adam, "optimizer_kwargs" : {"eps" : 1e-5, "betas" : [.99,.999]}})
         reward_model = RewardNet(l2= args.l2, dropout = args.dropout, env_type = args.env_type)        
         data_buffer = AnnotationBuffer()
-        store_args(args, run_dir)
-
+        
     # initializing RM optimizer
     rm_optimizer = optim.Adam(reward_model.parameters(), lr= 0.0003, weight_decay = reward_model.l2)
     
