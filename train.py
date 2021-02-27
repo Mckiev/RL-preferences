@@ -160,7 +160,7 @@ class RewardNet(nn.Module):
                 nn.Conv2d(16, 16, 3, stride=1),
                 nn.BatchNorm2d(16, momentum = 0.01),
                 nn.LeakyReLU(),
-                #nn.Dropout2d(p=dropout),
+                nn.Dropout2d(p=dropout),
                 # 2 layer mlp
                 nn.Flatten(),
                 nn.Linear(7*7*16, 64),
@@ -423,6 +423,7 @@ def main():
     parser.add_argument('--num_levels', type=int, default=1)
     parser.add_argument('--start_level', type=int, default=0)
     parser.add_argument('--log_dir', type=str, default='LOGS')
+    parser.add_argument('--log_prefix', type=str, default='')
     parser.add_argument('--log_name', type=str, default='')
     parser.add_argument('--cpu_buffer', dest = 'on_cuda', action='store_false', help = 'whether to store buffet on cpu or GPU \
                                                                                         by default requires up to 8GB memory on GPU')

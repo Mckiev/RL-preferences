@@ -7,6 +7,7 @@ import numpy as np
 import gym
 from stable_baselines3.common.vec_env import VecVideoRecorder, VecFrameStack
 import torch
+import subprocess
 
 def timeitt(method):
     '''
@@ -35,6 +36,9 @@ def timeitt(method):
                   (method.__name__, (te - ts) * 1000))
         return result
     return timed 
+
+def get_git_revision_short_hash():
+    return subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
 
 @timeitt
 def save_state(run_dir, i, reward_model, policy, data_buffer):
@@ -88,7 +92,7 @@ def setup_logging(args):
 
     #Setting up directory for logs
     if not args.log_name:
-        args.log_name = args.env_name + datetime.datetime.now().strftime('_%Y_%m_%d_%H_%-M_%S')
+        args.log_name = args.log_prefix + '_' + args.env_name + datetime.datetime.now().strftime('_%Y-%m-%d_%H:%M')
 
     run_dir = os.path.join(args.log_dir, args.log_name)
     os.makedirs(run_dir, exist_ok=True)
@@ -107,6 +111,12 @@ def store_args(args, run_dir):
     with open(args_path, 'w', encoding='utf-8') as f:
         json.dump(vars(args), f, indent=4)
         print(f'Config file saved to: {args_path}', flush=True)
+
+    #storing the commit number 
+    commit_path = os.path.join(run_dir, 'commit_hash.txt')
+    with open(commit_path, 'w') as f:
+        f.write(get_git_revision_short_hash())
+        print(f'Commit hash saved to: {commit_path}', flush=True)
 
 def load_args(args):
     run_dir = os.path.join(args.log_dir, args.log_name)

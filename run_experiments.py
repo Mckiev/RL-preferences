@@ -20,7 +20,7 @@ for (seed, env_name) in product(range(args.num_seeds), args.env_name):
 
     n_exps += 1
 
-    command = ['python', 'cuda_train.py']
+    command = ['python', 'train.py']
 
     command.append(f'--env_name {env_name}')
 
