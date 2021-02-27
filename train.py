@@ -414,8 +414,8 @@ def collect_annotations(venv, policy, num_pairs, clip_size, to_cuda = True):
     return data
 
 def main():
-    # #check for uncommited changes
-    # commit_check()
+    #check for uncommited changes
+    commit_check()
 
     ##setup args
     parser = argparse.ArgumentParser(description='Reward learning from preferences')
